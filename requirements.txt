@@ -1,0 +1,13 @@
+# 手部康复象棋系统 - 环境依赖清单
+# 安装命令：pip install -r requirements.txt
+#
+# 注意：mediapipe 会自动拉取 opencv-contrib-python，
+#       无需单独指定 opencv-python 版本
+
+# 核心依赖（桌面版）
+pygame==2.5.2
+mediapipe==0.10.14
+numpy>=1.26.4
+
+# 网页版额外依赖
+flask>=3.0.0

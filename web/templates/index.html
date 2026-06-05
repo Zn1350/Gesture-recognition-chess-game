@@ -1,0 +1,1153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>手部康复象棋</title>
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: radial-gradient(circle at top, #2b3056 0%, #100f1f 65%, #090912 100%);
+      color: #e0e0e0;
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px;
+      gap: 18px;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      letter-spacing: 4px;
+      color: #f0c040;
+      text-shadow: 0 0 14px rgba(240, 192, 64, 0.45);
+    }
+
+    #main {
+      display: grid;
+      grid-template-columns: 638px 637px;
+      grid-template-rows: auto auto;
+      column-gap: 5px;
+      row-gap: 18px;
+      justify-content: center;
+      width: min(1300px, 100%);
+      padding: 18px;
+      background: rgba(12, 16, 36, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 22px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+    }
+
+    /* ── 左列：摄像头 ── */
+    #cam-col {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: center;
+      width: 638px;
+      padding: 14px;
+      background: rgba(16, 20, 46, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 16px;
+      grid-row: 1;
+    }
+
+    #cam-wrap {
+      position: relative;
+      width: 638px;
+      height: 637px;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #111426;
+      box-shadow: inset 0 0 16px rgba(0, 0, 0, 0.35);
+    }
+
+    #cam-video {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 8px;
+      display: none;
+    }
+
+    #cam-canvas {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 8px;
+      cursor: none;
+    }
+
+    #cam-status {
+      font-size: 0.8rem;
+      color: #888;
+      text-align: center;
+    }
+
+    /* 手势状态指示 */
+    #gesture-badge {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: #16213e;
+      border: 1px solid #2a2a5a;
+      border-radius: 20px;
+      padding: 5px 14px;
+      font-size: 0.85rem;
+    }
+
+    .badge-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #444;
+    }
+
+    .badge-dot.idle {
+      background: #888;
+    }
+
+    .badge-dot.grabbing {
+      background: #4ade80;
+      box-shadow: 0 0 6px #4ade80;
+    }
+
+    .badge-dot.releasing {
+      background: #f0c040;
+      box-shadow: 0 0 6px #f0c040;
+    }
+
+    .badge-dot.scissors {
+      background: #7ec8e3;
+      box-shadow: 0 0 6px #7ec8e3;
+    }
+
+    /* 阈值显示 */
+    #thresh-panel {
+      background: #16213e;
+      border: 1px solid #2a2a5a;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 0.8rem;
+      width: 100%;
+    }
+
+    #thresh-panel .tr {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 3px;
+    }
+
+    #thresh-panel .tl {
+      color: #888;
+    }
+
+    #thresh-panel .tv {
+      color: #f0c040;
+      font-weight: bold;
+    }
+
+    /* ── 中列：棋盘 ── */
+    #board-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 16px;
+      background: rgba(18, 22, 42, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      width: 100%;
+      max-width: 637px;
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    canvas#board {
+      display: block;
+      cursor: crosshair;
+      border-radius: 14px;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: #241c0f;
+      width: 637px;
+      height: 637px;
+    }
+
+    #turn-banner {
+      text-align: center;
+      font-size: 1rem;
+      font-weight: bold;
+      height: 24px;
+    }
+
+    #turn-banner.red {
+      color: #ff6b6b;
+    }
+
+    #turn-banner.black {
+      color: #7ec8e3;
+    }
+
+    #turn-banner.over {
+      color: #f0c040;
+      font-size: 1.2rem;
+    }
+
+    #controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+      width: 100%;
+    }
+
+    #gesture-hint {
+      width: 100%;
+      margin-top: 10px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(20, 27, 56, 0.95);
+      border: 1px solid rgba(89, 103, 151, 0.18);
+      color: #d1d9ff;
+      font-size: 0.92rem;
+      text-align: center;
+      min-height: 54px;
+      line-height: 1.4;
+    }
+
+    button {
+      background: #2d2d4e;
+      color: #e0e0e0;
+      border: 1px solid #4a4a7a;
+      border-radius: 6px;
+      padding: 6px 18px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+
+    button:hover {
+      background: #3d3d6e;
+      border-color: #f0c040;
+      transform: translateY(-1px);
+    }
+
+    button:active {
+      background: #f0c040;
+      color: #1a1a2e;
+      transform: translateY(0);
+    }
+
+    button:active {
+      background: #f0c040;
+      color: #1a1a2e;
+    }
+
+    /* ── 右列：HUD ── */
+    #hud {
+      width: 100%;
+      max-width: 100%;
+      background: rgba(22, 33, 62, 0.96);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      grid-column: 1 / span 2;
+      grid-row: 2;
+    }
+
+    #hud h2 {
+      font-size: 0.95rem;
+      color: #f0c040;
+      border-bottom: 1px solid #2a2a5a;
+      padding-bottom: 5px;
+      margin-bottom: 10px;
+      letter-spacing: 2px;
+    }
+
+    .hud-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 0.82rem;
+    }
+
+    .hud-label {
+      color: #888;
+    }
+
+    .hud-value {
+      color: #e0e0e0;
+      font-weight: bold;
+    }
+
+    .hud-value.good {
+      color: #4ade80;
+    }
+
+    .hud-value.warn {
+      color: #facc15;
+    }
+
+    .hud-value.bad {
+      color: #f87171;
+    }
+
+    #skill-bar-bg {
+      height: 12px;
+      background: #2d2d4e;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 4px 0 2px;
+    }
+
+    #skill-bar-fill {
+      height: 100%;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #e63946, #f0c040, #4ade80);
+      transition: width .6s ease;
+    }
+
+    #ai-indicator {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      color: #7ec8e3;
+      font-size: 0.82rem;
+      margin-top: 8px;
+    }
+
+    #ai-indicator.show {
+      display: flex;
+    }
+
+    .dot-pulse {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #7ec8e3;
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+        transform: scale(1)
+      }
+
+      50% {
+        opacity: .3;
+        transform: scale(.6)
+      }
+    }
+
+    /* 剪刀手进度圆弧（叠在摄像头右下角） */
+    #scissors-overlay {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      width: 60px;
+      height: 60px;
+      display: none;
+    }
+
+    #scissors-overlay.show {
+      display: block;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>手部康复象棋</h1>
+
+  <div id="main">
+    <!-- 摄像头列 -->
+    <div id="cam-col">
+      <div id="cam-wrap">
+        <video id="cam-video" playsinline muted autoplay></video>
+        <canvas id="cam-canvas" width="638" height="637"></canvas>
+        <canvas id="scissors-overlay" width="60" height="60"></canvas>
+      </div>
+      <div id="cam-status">正在启动摄像头…</div>
+      <div id="gesture-badge">
+        <div class="badge-dot idle" id="bdot"></div>
+        <span id="btext">IDLE</span>
+        <span style="color:#666;margin-left:6px;font-size:0.75rem">ratio: <span id="bratio">—</span></span>
+      </div>
+      <div id="thresh-panel">
+        <div class="tr"><span class="tl">捏合阈值</span><span class="tv" id="tp">0.20</span></div>
+        <div class="tr"><span class="tl">松开阈值</span><span class="tv" id="trp">0.30</span></div>
+        <div class="tr"><span class="tl">保持帧数</span><span class="tv" id="thf">2</span></div>
+      </div>
+    </div>
+
+    <!-- 棋盘列 -->
+    <div id="board-col">
+      <canvas id="board" width="637" height="637"></canvas>
+      <div id="turn-banner" class="red">红方先行</div>
+      <div id="controls">
+        <button onclick="doUndo()">悔棋</button>
+        <button onclick="doRestart()">重新开始</button>
+      </div>
+      <div style="width:100%;display:flex;justify-content:center;margin-top:8px">
+        <button id="dev-toggle" onclick="toggleDev()">开发设置</button>
+      </div>
+      <div id="gesture-hint">请把手移入摄像头范围，握拳选中红棋，松开落子。</div>
+    </div>
+
+    <!-- HUD 列 -->
+    <div id="hud">
+      <h2>康复评估</h2>
+      <div class="hud-row">
+        <span class="hud-label">棋力评分</span>
+        <span class="hud-value" id="skill-score-text">30.0</span>
+      </div>
+      <div id="skill-bar-bg">
+        <div id="skill-bar-fill" style="width:30%"></div>
+      </div>
+      <div style="text-align:center;font-size:0.78rem;color:#f0c040;margin-bottom:10px" id="skill-label">初学康复</div>
+      <div id="ai-indicator">
+        <div class="dot-pulse"></div>AI 思考中…
+      </div>
+      <div style="margin-top:10px">
+        <div class="hud-row"><span class="hud-label">总步数</span><span class="hud-value" id="total-moves">0</span></div>
+        <div class="hud-row"><span class="hud-label">吃子数</span><span class="hud-value" id="captures">0</span></div>
+        <div class="hud-row"><span class="hud-label">失误率</span><span class="hud-value" id="error-rate">0%</span></div>
+        <div class="hud-row"><span class="hud-label">平均用时</span><span class="hud-value" id="avg-time">—</span></div>
+        <div class="hud-row"><span class="hud-label">AI 放水率</span><span class="hud-value" id="blunder-rate">—</span>
+        </div>
+        <div class="hud-row"><span class="hud-label">AI 搜索深度</span><span class="hud-value" id="search-depth">—</span>
+        </div>
+        <div class="hud-row"><span class="hud-label">QL 奖励</span><span class="hud-value" id="ql-reward">—</span></div>
+      </div>
+      <div style="margin-top:12px;border-top:1px solid #2a2a5a;padding-top:10px;font-size:0.76rem;color:#666">
+        <div>握拳→选子 · 松开→落子</div>
+        <div style="margin-top:3px">✌ 剪刀手3秒→悔棋</div>
+        <div style="margin-top:3px">停留3秒自动降低阈值</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MediaPipe CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <script>
+    // ════════════════════════════════════════════════════════
+    //  手势状态机（移植自 vision.py）
+    // ════════════════════════════════════════════════════════
+    const GestureState = { IDLE: "IDLE", GRABBING: "GRABBING", RELEASING: "RELEASING" };
+
+    // 阈值（由后端 RL 动态更新）
+    let PINCH_THRESH = 0.20;
+    let RELEASE_THRESH = 0.30;
+    let HOLD_FRAMES = 2;
+
+    let SMOOTH_WIN = 5;
+    const ratioBuffer = [];
+    // 位置平滑（指数平滑）用于减少光标抖动
+    let displayNormX = 0.0, displayNormY = 0.0;
+    let SMOOTH_ALPHA = 0.45;
+    const GRAB_STABLE_FRAMES = 2;
+    const RELEASE_HOLD_FRAMES = 3;
+
+    let smState = GestureState.IDLE;
+    let grabHoldFrames = 0;
+    let releaseHoldFrames = 0;
+    let grabStableFrames = 0;
+    let prevWasGrab = false;
+    let scissorsFrames = 0;
+    let gestureHint = "请把手移入摄像头范围，握拳选中红棋，松开落子。";
+
+    // 当前手势结果
+    let gesture = {
+      state: GestureState.IDLE,
+      normX: 0, normY: 0,
+      pinchRatio: 1.0,
+      handDetected: false,
+      isScissors: false,
+    };
+
+    function isFingerExtended(lm, tip, pip) { return lm[tip].y < lm[pip].y; }
+    function isFingerBent(lm, tip, pip) { return lm[tip].y > lm[pip].y; }
+
+    function detectScissors(lm) {
+      return isFingerExtended(lm, 8, 6) &&
+        isFingerExtended(lm, 12, 10) &&
+        isFingerBent(lm, 16, 14) &&
+        isFingerBent(lm, 20, 18);
+    }
+
+    function median(arr) {
+      const s = [...arr].sort((a, b) => a - b);
+      const m = Math.floor(s.length / 2);
+      return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    }
+
+    function hypot(ax, ay, bx, by) {
+      return Math.sqrt((ax - bx) ** 2 + (ay - by) ** 2);
+    }
+
+    function processLandmarks(lm) {
+      // 食指指尖(8)、拇指指尖(4)、手腕(0)、中指根(9)
+      const pinchD = hypot(lm[8].x, lm[8].y, lm[4].x, lm[4].y);
+      const palmD = hypot(lm[0].x, lm[0].y, lm[9].x, lm[9].y);
+      const ratio = pinchD / (palmD + 1e-6);
+
+      ratioBuffer.push(ratio);
+      if (ratioBuffer.length > SMOOTH_WIN) ratioBuffer.shift();
+      const smooth = median(ratioBuffer);
+
+      // 剪刀手防抖
+      if (detectScissors(lm)) scissorsFrames++;
+      else scissorsFrames = 0;
+
+      // 状态机
+      const isPinching = smooth < PINCH_THRESH;
+      const isOpen = smooth > RELEASE_THRESH;
+
+      if (isPinching) grabHoldFrames++;
+      else grabHoldFrames = 0;
+
+      if (isOpen) releaseHoldFrames++;
+      else releaseHoldFrames = 0;
+
+      let newState;
+      if (prevWasGrab) {
+        if (isOpen && releaseHoldFrames >= RELEASE_HOLD_FRAMES) {
+          newState = GestureState.RELEASING;
+          prevWasGrab = false;
+        } else if (isPinching || grabHoldFrames >= 1) {
+          newState = GestureState.GRABBING;
+          prevWasGrab = true;
+        } else {
+          newState = GestureState.IDLE;
+          prevWasGrab = false;
+        }
+      } else if (grabHoldFrames >= HOLD_FRAMES) {
+        newState = GestureState.GRABBING;
+        prevWasGrab = true;
+      } else {
+        newState = GestureState.IDLE;
+      }
+
+      // 使用掌心（wrist 与 mid_mcp 的平均）作为映射基准，避免指尖抖动影响映射
+      const palmX = (lm[0].x + lm[9].x) / 2;
+      const palmY = (lm[0].y + lm[9].y) / 2;
+
+      gesture = {
+        state: newState,
+        normX: palmX,
+        normY: palmY,
+        pinchRatio: smooth,
+        handDetected: true,
+        isScissors: scissorsFrames >= 3,
+      };
+
+      // 应用指数平滑到归一化坐标，减少抖动影响到映射
+      displayNormX = displayNormX * (1 - SMOOTH_ALPHA) + gesture.normX * SMOOTH_ALPHA;
+      displayNormY = displayNormY * (1 - SMOOTH_ALPHA) + gesture.normY * SMOOTH_ALPHA;
+      gesture.normX = displayNormX;
+      gesture.normY = displayNormY;
+    }
+
+    function resetGesture() {
+      grabHoldFrames = 0;
+      releaseHoldFrames = 0;
+      grabStableFrames = 0;
+      prevWasGrab = false;
+      scissorsFrames = 0;
+      ratioBuffer.length = 0;
+      gesture = {
+        state: GestureState.IDLE, normX: 0, normY: 0,
+        pinchRatio: 1.0, handDetected: false, isScissors: false
+      };
+      updateGestureHint(null);
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  棋盘渲染
+    // ════════════════════════════════════════════════════════
+    const boardCanvas = document.getElementById("board");
+    const bctx = boardCanvas.getContext("2d");
+    const BW = boardCanvas.width, BH = boardCanvas.height;
+    let PAD = 40;
+    const COLS = 9, ROWS = 10;
+    const CW = (BW - PAD * 2) / (COLS - 1);
+    const CH = (BH - PAD * 2) / (ROWS - 1);
+    const PR = Math.min(CW, CH) * 0.41;
+
+    function cx(c) { return PAD + c * CW; }
+    function cy(r) { return PAD + r * CH; }
+
+    // 把摄像头归一化坐标(0-1)映射到棋盘格子
+    // 摄像头水平镜像，x 需翻转
+    function normToCell(nx, ny) {
+      // 映射到 canvas 像素（棋盘区）
+      const px = (1 - nx) * BW;
+      const py = ny * BH;
+      let bestR = -1, bestC = -1, bestD = Infinity;
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const d = Math.hypot(px - cx(c), py - cy(r));
+          if (d < bestD) { bestD = d; bestR = r; bestC = c; }
+        }
+      }
+      return bestD < PR * 1.5 ? [bestR, bestC] : null;
+    }
+
+    let gameState = null;
+
+    // ---------------- 开发设置面板 ----------------
+    let devVisible = false;
+    function toggleDev() {
+      devVisible = !devVisible;
+      if (devVisible) showDev(); else hideDev();
+    }
+
+    function showDev() {
+      if (!document.getElementById('dev-panel')) {
+        const panel = document.createElement('div');
+        panel.id = 'dev-panel';
+        panel.style = 'position:fixed;left:50%;top:80px;transform:translateX(-50%);background:rgba(10,12,24,0.95);padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);z-index:9999;';
+        panel.innerHTML = `
+          <div style="color:#f0c040;font-weight:bold;margin-bottom:8px">开发设置</div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+            <label style="color:#ddd;width:120px">映射源</label>
+            <select id="dev-source"><option value="palm">掌心</option><option value="tip">指尖</option></select>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+            <label style="color:#ddd;width:120px">显示平滑 (α)</label>
+            <input id="dev-alpha" type="range" min="0" max="1" step="0.01" value="0.45" style="width:200px">
+            <span id="dev-alpha-val" style="color:#f0c040;margin-left:6px">0.45</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+            <label style="color:#ddd;width:120px">平滑窗口</label>
+            <input id="dev-win" type="number" min="1" max="20" value="5" style="width:80px">
+          </div>
+          <div style="text-align:right;margin-top:8px">
+            <button id="dev-apply">应用</button>
+            <button id="dev-close">关闭</button>
+          </div>
+        `;
+        document.body.appendChild(panel);
+        document.getElementById('dev-close').onclick = () => { hideDev(); };
+        document.getElementById('dev-apply').onclick = applyDevSettings;
+        const alphaInput = document.getElementById('dev-alpha');
+        alphaInput.oninput = (e) => { document.getElementById('dev-alpha-val').textContent = e.target.value; };
+      }
+      document.getElementById('dev-panel').style.display = 'block';
+      // 加载当前设置
+      fetch('/api/settings').then(r => r.json()).then(s => {
+        document.getElementById('dev-alpha').value = s.smooth_alpha;
+        document.getElementById('dev-alpha-val').textContent = s.smooth_alpha;
+        document.getElementById('dev-win').value = s.smooth_win;
+        document.getElementById('dev-source').value = s.use_palm ? 'palm' : 'tip';
+      }).catch(() => { });
+    }
+
+    function hideDev() { const p = document.getElementById('dev-panel'); if (p) p.style.display = 'none'; devVisible = false; }
+
+    function applyDevSettings() {
+      const src = document.getElementById('dev-source').value;
+      const alpha = parseFloat(document.getElementById('dev-alpha').value);
+      const win = parseInt(document.getElementById('dev-win').value, 10);
+      // 更新前端变量
+      SMOOTH_ALPHA = alpha;
+      SMOOTH_WIN = win;
+      // 发送到后端
+      fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ use_palm: src === 'palm', smooth_alpha: alpha, smooth_win: win }) })
+        .then(r => r.json()).then(() => { hideDev(); });
+    }
+
+    function drawBoardCanvas(s) {
+      bctx.clearRect(0, 0, BW, BH);
+      bctx.fillStyle = "#2b1d0e";
+      bctx.fillRect(0, 0, BW, BH);
+
+      // 格线
+      bctx.strokeStyle = "#8b6914"; bctx.lineWidth = 1;
+      for (let r = 0; r < ROWS; r++) {
+        bctx.beginPath(); bctx.moveTo(cx(0), cy(r)); bctx.lineTo(cx(COLS - 1), cy(r)); bctx.stroke();
+      }
+      for (let c = 0; c < COLS; c++) {
+        bctx.beginPath(); bctx.moveTo(cx(c), cy(0)); bctx.lineTo(cx(c), cy(4)); bctx.stroke();
+        bctx.beginPath(); bctx.moveTo(cx(c), cy(5)); bctx.lineTo(cx(c), cy(9)); bctx.stroke();
+      }
+
+      // 楚河汉界
+      bctx.fillStyle = "#c8a84b";
+      bctx.font = `bold ${Math.round(CH * 0.35)}px "Microsoft YaHei",sans-serif`;
+      bctx.textAlign = "center"; bctx.textBaseline = "middle";
+      const midY = (cy(4) + cy(5)) / 2;
+      bctx.fillText("楚  河", cx(2), midY);
+      bctx.fillText("汉  界", cx(6), midY);
+
+      // 标记点
+      [[2, 1], [2, 7], [7, 1], [7, 7],
+      [3, 0], [3, 2], [3, 4], [3, 6], [3, 8],
+      [6, 0], [6, 2], [6, 4], [6, 6], [6, 8]].forEach(([r, c]) => {
+        const x = cx(c), y = cy(r), d = 4;
+        bctx.fillStyle = "#8b6914";
+        [[x - d - 1, y - 1], [x + d - 1, y - 1], [x - 1, y - d - 1], [x - 1, y + d - 1]].forEach(([rx, ry]) => {
+          bctx.fillRect(rx, ry, 3, 3);
+        });
+      });
+
+      if (!s) return;
+
+      // 合法落点
+      (s.legal_moves || []).forEach(([r, c]) => {
+        bctx.beginPath(); bctx.arc(cx(c), cy(r), PR * 0.42, 0, Math.PI * 2);
+        bctx.fillStyle = "rgba(100,220,100,0.35)"; bctx.fill();
+        bctx.strokeStyle = "rgba(100,220,100,0.8)"; bctx.lineWidth = 2; bctx.stroke();
+      });
+
+      // 选中高亮
+      if (s.selected) {
+        const [sr, sc] = s.selected;
+        bctx.beginPath(); bctx.arc(cx(sc), cy(sr), PR + 4, 0, Math.PI * 2);
+        bctx.strokeStyle = "#f0c040"; bctx.lineWidth = 3; bctx.stroke();
+      }
+
+      // 棋子
+      s.board.forEach((row, r) => {
+        row.forEach((cell, c) => {
+          if (!cell.piece) return;
+          const x = cx(c), y = cy(r);
+          bctx.beginPath(); bctx.arc(x, y, PR, 0, Math.PI * 2);
+          if (cell.color === "red") {
+            const g = bctx.createRadialGradient(x - PR * .3, y - PR * .3, 2, x, y, PR);
+            g.addColorStop(0, "#e74c3c"); g.addColorStop(1, "#7b0000");
+            bctx.fillStyle = g;
+          } else {
+            const g = bctx.createRadialGradient(x - PR * .3, y - PR * .3, 2, x, y, PR);
+            g.addColorStop(0, "#2c3e6a"); g.addColorStop(1, "#0a0a1a");
+            bctx.fillStyle = g;
+          }
+          bctx.fill();
+          bctx.beginPath(); bctx.arc(x, y, PR, 0, Math.PI * 2);
+          bctx.strokeStyle = cell.color === "red" ? "#ff8080" : "#4a7aad";
+          bctx.lineWidth = 2; bctx.stroke();
+          bctx.beginPath(); bctx.arc(x, y, PR * .82, 0, Math.PI * 2);
+          bctx.strokeStyle = cell.color === "red" ? "rgba(255,200,150,.4)" : "rgba(100,150,220,.4)";
+          bctx.lineWidth = 1; bctx.stroke();
+          bctx.font = `bold ${Math.round(PR * 1.1)}px "Microsoft YaHei",sans-serif`;
+          bctx.textAlign = "center"; bctx.textBaseline = "middle";
+          bctx.fillStyle = cell.color === "red" ? "#ffe0b2" : "#b3d9ff";
+          bctx.fillText(cell.char, x, y);
+        });
+      });
+
+      // 手势光标（在棋盘上的映射位置）
+      if (gesture.handDetected) {
+        const px = (1 - gesture.normX) * BW;
+        const py = gesture.normY * BH;
+        bctx.beginPath(); bctx.arc(px, py, 10, 0, Math.PI * 2);
+        const col = gesture.state === GestureState.GRABBING ? "rgba(80,255,80,.7)" :
+          gesture.state === GestureState.RELEASING ? "rgba(255,220,0,.7)" : "rgba(200,200,200,.4)";
+        bctx.strokeStyle = col; bctx.lineWidth = 2; bctx.stroke();
+        bctx.moveTo(px - 14, py); bctx.lineTo(px + 14, py);
+        bctx.moveTo(px, py - 14); bctx.lineTo(px, py + 14);
+        bctx.stroke();
+      }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  摄像头渲染
+    // ════════════════════════════════════════════════════════
+    const camCanvas = document.getElementById("cam-canvas");
+    const cctx = camCanvas.getContext("2d");
+    const CamW = camCanvas.width, CamH = camCanvas.height;
+
+    function drawCamFrame(results) {
+      cctx.save();
+      // 水平镜像（与 Python 端一致）
+      cctx.translate(CamW, 0); cctx.scale(-1, 1);
+      if (results.image) cctx.drawImage(results.image, 0, 0, CamW, CamH);
+      cctx.restore();
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const lm = results.multiHandLandmarks[0];
+        // 绘制骨架（镜像后坐标也要翻转 x）
+        const mirroredLm = lm.map(p => ({ x: 1 - p.x, y: p.y, z: p.z }));
+        drawConnectors(cctx, mirroredLm, HAND_CONNECTIONS,
+          { color: "#00ff88", lineWidth: 2 });
+        drawLandmarks(cctx, mirroredLm,
+          { color: "#ff4444", lineWidth: 1, radius: 3 });
+
+        // 捏合中心圆
+        const idxX = (1 - lm[8].x) * CamW;
+        const idxY = lm[8].y * CamH;
+        const thmX = (1 - lm[4].x) * CamW;
+        const thmY = lm[4].y * CamH;
+        const midX = (idxX + thmX) / 2, midY = (idxY + thmY) / 2;
+        const col = gesture.state === GestureState.GRABBING ? "#00ff00" :
+          gesture.state === GestureState.RELEASING ? "#ffff00" : "#aaaaaa";
+        cctx.beginPath(); cctx.arc(midX, midY, 12, 0, Math.PI * 2);
+        cctx.strokeStyle = col; cctx.lineWidth = 2; cctx.stroke();
+
+        // 状态文字
+        cctx.font = "bold 14px sans-serif"; cctx.textAlign = "left";
+        cctx.fillStyle = col;
+        cctx.fillText(gesture.state, 8, 22);
+        cctx.fillStyle = "#ccc";
+        cctx.fillText(`ratio:${gesture.pinchRatio.toFixed(2)}`, 8, 40);
+        if (gesture.isScissors) {
+          cctx.fillStyle = "#7ec8e3";
+          cctx.fillText("SCISSORS ✌", 8, 58);
+        }
+      } else {
+        cctx.font = "14px sans-serif"; cctx.textAlign = "left";
+        cctx.fillStyle = "#666";
+        cctx.fillText("未检测到手", 8, 22);
+      }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  剪刀手悔棋进度弧
+    // ════════════════════════════════════════════════════════
+    const sciCanvas = document.getElementById("scissors-overlay");
+    const sctx = sciCanvas.getContext("2d");
+    const SCW = sciCanvas.width, SCH = sciCanvas.height;
+
+    function drawScissorsArc(progress) {
+      sctx.clearRect(0, 0, SCW, SCH);
+      const cx2 = SCW / 2, cy2 = SCH / 2, r = SCW / 2 - 4;
+      // 背景圆
+      sctx.beginPath(); sctx.arc(cx2, cy2, r, 0, Math.PI * 2);
+      sctx.strokeStyle = "rgba(126,200,227,0.25)"; sctx.lineWidth = 4; sctx.stroke();
+      // 进度弧（顺时针从顶部）
+      if (progress > 0) {
+        sctx.beginPath();
+        sctx.arc(cx2, cy2, r, -Math.PI / 2, -Math.PI / 2 + progress * 2 * Math.PI);
+        sctx.strokeStyle = "#7ec8e3"; sctx.lineWidth = 4; sctx.stroke();
+      }
+      // 图标
+      sctx.font = "22px sans-serif"; sctx.textAlign = "center"; sctx.textBaseline = "middle";
+      sctx.fillText("✌", cx2, cy2 + 1);
+      // 倒计时秒数
+      const remain = (3 * (1 - progress)).toFixed(1);
+      sctx.font = "bold 10px sans-serif"; sctx.fillStyle = "#7ec8e3";
+      sctx.fillText(remain + "s", cx2, cy2 + 18);
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  手势交互逻辑（移植自 main.py _handle_gesture）
+    // ════════════════════════════════════════════════════════
+    const UNDO_HOLD_SECS = 3.0;
+    const DWELL_TIMEOUT = 3.0;
+
+    let releaseHandled = false;
+    let scissorsEnabled = false;
+    let undoHoverStart = null;
+    let undoProgress = 0;
+    let dwellStart = null;
+    let dwellLastPos = null;
+    let grabTargetPos = null;
+    let grabStablePosKey = null;
+    let grabSentPos = null;
+    // 上一帧的手势状态，用于检测 IDLE→GRABBING 的跳变
+    let prevGestureState = GestureState.IDLE;
+
+    function cellKey(pos) { return pos ? pos[0] + "," + pos[1] : null; }
+
+    async function handleGesture() {
+      if (!gesture.handDetected) {
+        undoHoverStart = null; undoProgress = 0;
+        dwellStart = null; dwellLastPos = null;
+        grabSentPos = null;
+        prevGestureState = GestureState.IDLE;
+        sciCanvas.classList.remove("show");
+        updateGestureHint(null);
+        return;
+      }
+      if (!gameState || gameState.game_over || gameState.current_turn !== "red" || gameState.ai_thinking) {
+        sciCanvas.classList.remove("show");
+        prevGestureState = gesture.state;
+        updateGestureHint(boardPos);
+        return;
+      }
+
+      // ── 剪刀手悔棋 ──────────────────────────────────────────────────────────
+      if (scissorsEnabled && gesture.isScissors) {
+        sciCanvas.classList.add("show");
+        if (undoHoverStart === null) undoHoverStart = performance.now();
+        const elapsed = (performance.now() - undoHoverStart) / 1000;
+        undoProgress = Math.min(elapsed / UNDO_HOLD_SECS, 1.0);
+        drawScissorsArc(undoProgress);
+        if (elapsed >= UNDO_HOLD_SECS) {
+          undoHoverStart = null; undoProgress = 0;
+          await doUndo();
+        }
+        prevGestureState = gesture.state;
+        return;
+      } else {
+        undoHoverStart = null; undoProgress = 0;
+        sciCanvas.classList.remove("show");
+      }
+
+      // 手势映射到棋盘格子
+      const boardPos = normToCell(gesture.normX, gesture.normY);
+      const posKey = cellKey(boardPos);
+
+      // ── GRABBING：仅在“稳定抓取”后发送选子请求 ───────────────────────────
+      if (gesture.state === GestureState.GRABBING) {
+        releaseHandled = false;
+        dwellStart = null; dwellLastPos = null;
+
+        if (boardPos) {
+          if (grabTargetPos && posKey === grabStablePosKey) {
+            grabStableFrames++;
+          } else {
+            grabTargetPos = boardPos;
+            grabStablePosKey = posKey;
+            grabStableFrames = 1;
+          }
+        } else {
+          grabTargetPos = null;
+          grabStablePosKey = null;
+          grabStableFrames = 0;
+        }
+
+        if (boardPos && grabStableFrames >= GRAB_STABLE_FRAMES && posKey !== grabSentPos) {
+          grabSentPos = posKey;
+          await sendGrab(boardPos[0], boardPos[1]);
+        }
+
+        // ── RELEASING：仅触发一次落子 ─────────────────────────────────────────
+      } else if (gesture.state === GestureState.RELEASING && !releaseHandled) {
+        releaseHandled = true;
+        grabSentPos = null;
+        dwellStart = null; dwellLastPos = null;
+        if (boardPos) {
+          await sendRelease(boardPos[0], boardPos[1]);
+        } else {
+          await fetchAndApply("/api/release_miss", "POST");
+        }
+
+      } else if (gesture.state === GestureState.IDLE) {
+        // IDLE 时清除 grabSentPos，为下一次 GRABBING 准备
+        if (prevGestureState !== GestureState.IDLE) {
+          grabSentPos = null;
+          grabTargetPos = null;
+          grabStablePosKey = null;
+          grabStableFrames = 0;
+        }
+
+        // 停留超时检测
+        if (boardPos) {
+          if (dwellLastPos === posKey) {
+            if (dwellStart === null) dwellStart = performance.now();
+            else if ((performance.now() - dwellStart) / 1000 >= DWELL_TIMEOUT) {
+              dwellStart = null;
+              await fetchAndApply("/api/dwell_timeout", "POST");
+            }
+          } else {
+            dwellLastPos = posKey;
+            dwellStart = null;
+          }
+        } else {
+          dwellStart = null; dwellLastPos = null;
+        }
+      }
+
+      updateGestureHint(boardPos);
+      prevGestureState = gesture.state;
+    }
+
+    function updateGestureHint(boardPos) {
+      if (!gesture.handDetected) {
+        gestureHint = "请把手放入摄像头范围内，确保手掌完整可见。";
+      } else if (gesture.isScissors) {
+        gestureHint = "剪刀手识别中，保持3秒可悔棋。";
+      } else if (gameState && gameState.ai_thinking) {
+        gestureHint = "AI 思考中，请稍候。";
+      } else if (!gameState || gameState.game_over) {
+        gestureHint = "可以点击重新开始或等待新局开始。";
+      } else if (gesture.state === GestureState.GRABBING) {
+        if (boardPos) {
+          gestureHint = `握紧选子中：目标 (${boardPos[0] + 1},${boardPos[1] + 1})，保持稳定 ${GRAB_STABLE_FRAMES} 帧后发送。`;
+        } else {
+          gestureHint = "握紧手指，移动到棋子上以选中。";
+        }
+      } else if (gesture.state === GestureState.RELEASING) {
+        if (boardPos) {
+          gestureHint = `松开落子中：目标 (${boardPos[0] + 1},${boardPos[1] + 1})。`;
+        } else {
+          gestureHint = "松开手指以落子，或移向合法目标。";
+        }
+      } else {
+        gestureHint = boardPos ? "移动到棋子上，握紧手指开始选子。" : "请把手移到棋盘区域内。";
+      }
+      document.getElementById("gesture-hint").textContent = gestureHint;
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  API 调用
+    // ════════════════════════════════════════════════════════
+    let _pollTimer = null;
+
+    async function sendGrab(row, col) {
+      const res = await fetch("/api/grab", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ row, col }),
+      });
+      applyState(await res.json());
+    }
+
+    async function sendRelease(row, col) {
+      const res = await fetch("/api/release", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ row, col }),
+      });
+      applyState(await res.json());
+    }
+
+    async function fetchAndApply(url, method = "GET") {
+      const res = await fetch(url, { method });
+      applyState(await res.json());
+    }
+
+    async function doUndo() {
+      scissorsEnabled = false;
+      await fetchAndApply("/api/undo", "POST");
+    }
+
+    async function doRestart() {
+      if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+      scissorsEnabled = false;
+      releaseHandled = false;
+      await fetchAndApply("/api/restart", "POST");
+    }
+
+    function applyState(s) {
+      gameState = s;
+      drawBoardCanvas(s);
+      updateHUD(s);
+      // 同步 RL 阈值到 JS 状态机
+      if (s.rl_thresholds) {
+        PINCH_THRESH = s.rl_thresholds.pinch;
+        RELEASE_THRESH = s.rl_thresholds.release;
+        HOLD_FRAMES = s.rl_thresholds.hold;
+        document.getElementById("tp").textContent = PINCH_THRESH.toFixed(3);
+        document.getElementById("trp").textContent = RELEASE_THRESH.toFixed(3);
+        document.getElementById("thf").textContent = HOLD_FRAMES;
+      }
+      // 同步剪刀手启用状态
+      if (typeof s.scissors_enabled === "boolean") scissorsEnabled = s.scissors_enabled;
+
+      if (s.ai_thinking && !_pollTimer) {
+        _pollTimer = setInterval(async () => {
+          const st = await (await fetch("/api/state")).json();
+          if (!st.ai_thinking) { clearInterval(_pollTimer); _pollTimer = null; }
+          applyState(st);
+        }, 400);
+      }
+    }
+
+    function updateHUD(s) {
+      const score = s.stats.skill_score;
+      document.getElementById("skill-score-text").textContent = score.toFixed(1);
+      document.getElementById("skill-bar-fill").style.width = score + "%";
+      document.getElementById("skill-label").textContent = s.stats.skill_label;
+      document.getElementById("ai-indicator").className = s.ai_thinking ? "show" : "";
+      document.getElementById("total-moves").textContent = s.stats.total_moves;
+      document.getElementById("captures").textContent = s.stats.captures;
+      const er = document.getElementById("error-rate");
+      er.textContent = s.stats.error_rate.toFixed(1) + "%";
+      er.className = "hud-value " + (s.stats.error_rate < 10 ? "good" : s.stats.error_rate < 25 ? "warn" : "bad");
+      document.getElementById("avg-time").textContent = s.stats.avg_move_time > 0 ? s.stats.avg_move_time.toFixed(1) + "s" : "—";
+      document.getElementById("blunder-rate").textContent = s.stats.ai_blunder_rate.toFixed(0) + "%";
+      document.getElementById("search-depth").textContent = s.stats.ai_search_depth;
+      const qlr = document.getElementById("ql-reward");
+      const rv = s.stats.last_ql_reward;
+      qlr.textContent = (rv >= 0 ? "+" : "") + rv.toFixed(2);
+      qlr.className = "hud-value " + (rv > 0 ? "good" : rv < 0 ? "bad" : "");
+      const banner = document.getElementById("turn-banner");
+      if (s.game_over) {
+        banner.className = "over";
+        banner.textContent = s.winner === "red" ? "🎉 红方胜利！" : "❌ 黑方胜利，再接再厉！";
+      } else if (s.ai_thinking) {
+        banner.className = "black"; banner.textContent = "黑方（AI）思考中…";
+      } else {
+        banner.className = s.current_turn;
+        banner.textContent = s.current_turn === "red" ? "红方走棋（你）" : "黑方走棋（AI）";
+      }
+      // 手势状态徽章
+      const dot = document.getElementById("bdot");
+      const btxt = document.getElementById("btext");
+      const bratio = document.getElementById("bratio");
+      dot.className = "badge-dot " + (gesture.isScissors ? "scissors" : gesture.state.toLowerCase());
+      btxt.textContent = gesture.isScissors ? "SCISSORS" : gesture.state;
+      bratio.textContent = gesture.handDetected ? gesture.pinchRatio.toFixed(3) : "—";
+      document.getElementById("gesture-hint").textContent = gestureHint;
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  MediaPipe Hands 初始化
+    // ════════════════════════════════════════════════════════
+    const video = document.getElementById("cam-video");
+    const statusEl = document.getElementById("cam-status");
+
+    const hands = new Hands({
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`,
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.5,
+    });
+
+    hands.onResults(async (results) => {
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        processLandmarks(results.multiHandLandmarks[0]);
+      } else {
+        resetGesture();
+      }
+      drawCamFrame(results);
+      // 更新徽章 ratio（实时，不等 HUD 全刷新）
+      document.getElementById("bratio").textContent =
+        gesture.handDetected ? gesture.pinchRatio.toFixed(3) : "—";
+      const dot = document.getElementById("bdot");
+      dot.className = "badge-dot " + (gesture.isScissors ? "scissors" : gesture.state.toLowerCase());
+      document.getElementById("btext").textContent = gesture.isScissors ? "SCISSORS" : gesture.state;
+      // 交互逻辑
+      await handleGesture();
+    });
+
+    const camera = new Camera(video, {
+      onFrame: async () => { await hands.send({ image: video }); },
+      width: 360, height: 270,
+    });
+    camera.start()
+      .then(() => { statusEl.textContent = "摄像头已就绪"; })
+      .catch(e => { statusEl.textContent = "摄像头启动失败：" + e.message; });
+
+    // ── 初始加载 ─────────────────────────────────────────────────────────────────
+    (async () => { applyState(await (await fetch("/api/state")).json()); })();
+  </script>
+</body>
+
+</html>

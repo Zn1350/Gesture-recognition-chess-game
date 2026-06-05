@@ -1,0 +1,16 @@
+cd /d E:\university\Programmmmming\Python\rehab_system_version5
+
+# Windows CMD
+venv\Scripts\activate
+python main.py
+
+# Windows PowerShell
+venv\Scripts\Activate.ps1
+python main.py
+
+# 或直接用虚拟环境的 python（无需激活）
+venv\Scripts\python main.py
+
+# 【网页版】
+cd rehab_system_version5
+venv/Scripts/python web/app.py
