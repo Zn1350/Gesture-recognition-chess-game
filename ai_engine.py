@@ -23,7 +23,8 @@
 
 from __future__ import annotations
 import random
-from typing import List, Optional, Tuple
+import time
+from typing import List, Optional, Tuple, Dict
 
 from chess_game import (
     ChessGame, RED, BLACK,
@@ -132,6 +133,10 @@ class AIEngine:
 
     def __init__(self):
         self._nodes = 0
+        # 置换表：{board_key: (depth, score, best_move)}
+        self._tt: Dict[Tuple, Tuple[int, int, Optional[Tuple[int,int,int,int]]]] = {}
+        # 历史启发表：{move_key: score}
+        self._history: Dict[Tuple[int,int,int,int], int] = {}
 
     def get_move(
         self,
@@ -250,8 +255,50 @@ class AIEngine:
             scored.append((score, move))
         scored.sort(key=lambda x: x[0])  # 升序：越小对 BLACK 越好
         return scored
+    # ── 辅助：置换表 / 走法排序 / 静态搜索 ─────────────────────────────────────────
 
-    # ── 正常搜索 ──────────────────────────────────────────────────────────────
+    def _board_key(self, game: ChessGame) -> Tuple:
+        return (tuple(tuple(row) for row in game.board), game.current_turn)
+
+    def _order_moves(self, game: ChessGame, moves: List[Tuple]) -> List[Tuple]:
+        """按照吃子优先、历史启发排序（降序）"""
+        scored = []
+        for m in moves:
+            fr, fc, tr, tc = m
+            captured = game.board[tr][tc]
+            cap_score = abs(captured) if captured != EMPTY else 0
+            hist_score = self._history.get(m, 0)
+            score = cap_score * 1000 + hist_score
+            scored.append((score, m))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [m for _, m in scored]
+
+    def _quiescence(self, game: ChessGame, alpha: int, beta: int, color: int) -> int:
+        """简单静态搜索：只扩展吃子走法以稳定评估"""
+        stand_pat = self._evaluate(game)
+        if stand_pat >= beta:
+            return beta
+        if alpha < stand_pat:
+            alpha = stand_pat
+
+        moves = game.get_all_moves(color)
+        # 只保留吃子走法
+        cap_moves = [m for m in moves if game.board[m[2]][m[3]] != EMPTY]
+        if not cap_moves:
+            return stand_pat
+
+        cap_moves = self._order_moves(game, cap_moves)
+        for move in cap_moves:
+            g = game.board_copy()
+            g.make_move(*move)
+            score = -self._quiescence(g, -beta, -alpha, -color)
+            if score >= beta:
+                return beta
+            if score > alpha:
+                alpha = score
+        return alpha
+
+    # ── 正常搜索（迭代加深 + 置换表 + Alpha-Beta）────────────────────────────────
 
     def _best_move(
         self,
@@ -260,58 +307,104 @@ class AIEngine:
         depth: int,
         skill_score: float,
     ) -> Tuple[int, int, int, int]:
-        """Alpha-Beta 搜索，搜索完成后根据棋力分加入轻微次优随机"""
+        """迭代加深调用 _minimax，并使用历史启发/置换表提高效率"""
         self._nodes = 0
-        alpha, beta = -999999, 999999
-        moves.sort(key=lambda m: abs(game.board[m[2]][m[3]]), reverse=True)
+        best_move = None
+        best_score = None
 
-        scored = []
-        for move in moves:
-            g = game.board_copy()
-            g.make_move(*move)
-            score = self._minimax(g, depth - 1, alpha, beta, True)
-            scored.append((score, move))
-            beta = min(beta, score)
+        # 初始走法排序
+        ordered_moves = self._order_moves(game, moves)
 
-        if not scored:
+        for d in range(1, max(1, depth) + 1):
+            alpha, beta = -999999, 999999
+            local_best = None
+            local_best_score = None
+            for move in ordered_moves:
+                g = game.board_copy()
+                g.make_move(*move)
+                score = self._minimax(g, d - 1, alpha, beta, False)
+                # 这里 score 为局面评估（正值 RED 有利）
+                if local_best_score is None or score > local_best_score:
+                    local_best_score = score
+                    local_best = move
+                alpha = max(alpha, score)
+            if local_best is not None:
+                best_move = local_best
+                best_score = local_best_score
+
+        if not best_move:
             return random.choice(moves)
 
-        scored.sort(key=lambda x: x[0])  # 越小对 BLACK 越好
-
         # 棋力分 40~80 时：有小概率选次优（保留一定人性化失误）
-        if skill_score < 80 and len(scored) > 1:
+        if skill_score < 80 and len(ordered_moves) > 1:
             subopt_prob = max(0.0, (80 - skill_score) / 80 * 0.25)
             if random.random() < subopt_prob:
-                top2 = scored[:min(3, len(scored))]
-                return random.choice(top2)[1]
+                top_choices = ordered_moves[:min(3, len(ordered_moves))]
+                return random.choice(top_choices)
 
-        return scored[0][1]
+        return best_move
 
-    def _minimax(self, game, depth, alpha, beta, is_max) -> int:
+    def _minimax(self, game: ChessGame, depth: int, alpha: int, beta: int, is_max: bool) -> int:
         self._nodes += 1
-        if game.game_over or depth == 0:
-            return self._evaluate(game)
+        key = self._board_key(game)
+        # 置换表查询
+        tt_entry = self._tt.get(key)
+        if tt_entry is not None:
+            stored_depth, stored_score, _ = tt_entry
+            if stored_depth >= depth:
+                return stored_score
+
+        if game.game_over:
+            val = 100000 if game.winner == RED else -100000
+            return val
+
+        if depth <= 0:
+            # 进入静态搜索以避免“快照问题”
+            val = self._quiescence(game, alpha, beta, RED if is_max else BLACK)
+            # 记录到置换表
+            self._tt[key] = (0, val, None)
+            return val
+
         moves = game.get_all_moves(RED if is_max else BLACK)
         if not moves:
-            return self._evaluate(game)
-        moves.sort(key=lambda m: abs(game.board[m[2]][m[3]]), reverse=True)
+            val = self._evaluate(game)
+            self._tt[key] = (depth, val, None)
+            return val
+
+        moves = self._order_moves(game, moves)
+
         if is_max:
             best = -999999
+            best_move = None
             for move in moves:
                 g = game.board_copy()
                 g.make_move(*move)
-                best = max(best, self._minimax(g, depth-1, alpha, beta, False))
+                score = self._minimax(g, depth - 1, alpha, beta, False)
+                if score > best:
+                    best = score
+                    best_move = move
                 alpha = max(alpha, best)
-                if beta <= alpha: break
+                if beta <= alpha:
+                    # 历史启发：增加该走法权重
+                    self._history[move] = self._history.get(move, 0) + (1 << depth)
+                    break
+            self._tt[key] = (depth, best, best_move)
             return best
         else:
             best = 999999
+            best_move = None
             for move in moves:
                 g = game.board_copy()
                 g.make_move(*move)
-                best = min(best, self._minimax(g, depth-1, alpha, beta, True))
+                score = self._minimax(g, depth - 1, alpha, beta, True)
+                if score < best:
+                    best = score
+                    best_move = move
                 beta = min(beta, best)
-                if beta <= alpha: break
+                if beta <= alpha:
+                    self._history[move] = self._history.get(move, 0) + (1 << depth)
+                    break
+            self._tt[key] = (depth, best, best_move)
             return best
 
     def _evaluate(self, game: ChessGame) -> int:
