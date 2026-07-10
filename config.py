@@ -74,6 +74,10 @@ AI_BLUNDER_RATE = {1: 0.50, 2: 0.35, 3: 0.20, 4: 0.08, 5: 0.00}
 USE_NN_EVALUATOR = True
 NN_EVAL_MODEL_PATH = "model_improved.pth"
 
+# 轻量双头网络（MicroDualNet：价值头+策略头，自我对弈训练产出）模型路径
+# 文件不存在时 AIEngine 自动回退到 NN_EVAL_MODEL_PATH / 纯手工评估，行为不变
+MICRO_NN_MODEL_PATH = "micro_dual.pth"
+
 # AI 思考延迟（秒）
 AI_THINK_DELAY = 0.8
 

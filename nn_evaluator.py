@@ -4,7 +4,7 @@
 用于加载由 Kaggle notebook 训练并保存的局面估值模型（残差 CNN，15 通道输入）。
 """
 from __future__ import annotations
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 
 try:
     import torch
@@ -142,3 +142,118 @@ def evaluate_board(game: ChessGame, model, device, y_mean: float = 0.0, y_std: f
         tensor = board_to_tensor(game).to(device)
         raw = model(tensor)
         return float(raw.item()) * y_std + y_mean
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MicroDualNet —— 轻量双头网络（价值头 + 策略头），用于自我对弈数据训练
+# 与上方 ImprovedEvalNet（15通道 CNN，读取 model_improved.pth）完全独立、互不影响。
+# ─────────────────────────────────────────────────────────────────────────────
+from features import FEATURE_DIM, MOVE_FEAT_DIM, extract_features, _move_to_feat
+
+MICRO_HIDDEN = 128
+MICRO_POLICY_HIDDEN = 64
+
+
+if TORCH_AVAILABLE:
+    class MicroDualNet(nn.Module):
+        """
+        输入:
+          s          形状 (B, 60)         局面特征
+          move_feats 形状 (B, num_moves, 12) 走法特征（每个局面走法数可不同，调用方自行分批）
+        输出:
+          v      形状 (B, 1)           价值头，tanh 后 in [-1, 1]
+          scores 形状 (B, num_moves)   策略头，每个候选走法一个分数（未做 softmax）
+        """
+        def __init__(self, feature_dim: int = FEATURE_DIM, move_feat_dim: int = MOVE_FEAT_DIM):
+            super().__init__()
+            self.shared = nn.Sequential(
+                nn.Linear(feature_dim, MICRO_HIDDEN),
+                nn.ReLU(inplace=True),
+                nn.Linear(MICRO_HIDDEN, MICRO_HIDDEN),
+                nn.ReLU(inplace=True),
+            )
+            self.value_head = nn.Sequential(
+                nn.Linear(MICRO_HIDDEN, 1),
+                nn.Tanh(),
+            )
+            self.policy_head = nn.Sequential(
+                nn.Linear(MICRO_HIDDEN + move_feat_dim, MICRO_POLICY_HIDDEN),
+                nn.ReLU(inplace=True),
+                nn.Linear(MICRO_POLICY_HIDDEN, 1),
+            )
+
+        def forward(self, s, move_feats):
+            h = self.shared(s)                      # (B, 128)
+            v = self.value_head(h)                   # (B, 1)
+
+            num_moves = move_feats.shape[1]
+            h_expanded = h.unsqueeze(1).expand(-1, num_moves, -1)   # (B, num_moves, 128)
+            policy_in = torch.cat([h_expanded, move_feats], dim=-1)  # (B, num_moves, 140)
+            scores = self.policy_head(policy_in).squeeze(-1)         # (B, num_moves)
+            return v, scores
+else:
+    MicroDualNet = None  # type: ignore
+
+
+class NNEvaluator:
+    """
+    MicroDualNet 的推理封装。
+
+    - value(game) -> float，范围 [-1, 1]，正值对 RED 有利
+    - policy_scores(game, legal_moves) -> Dict[move, float]
+
+    若 micro_dual.pth 不存在或加载失败，self.nn_available = False，
+    调用方（ai_engine.py）需在该情况下回退到旧逻辑（保证向下兼容）。
+    """
+
+    def __init__(self, model_path: str = "micro_dual.pth", device: Optional[str] = None):
+        self.nn_available = False
+        self.model = None
+        self.device = None
+
+        if not TORCH_AVAILABLE:
+            return
+        import os as _os
+        if not _os.path.exists(model_path):
+            return
+
+        try:
+            if device is None:
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            self.device = torch.device(device)
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+            self.model = MicroDualNet().to(self.device)
+            self.model.load_state_dict(checkpoint['state_dict'])
+            self.model.eval()
+            self.nn_available = True
+        except Exception as e:
+            print(f"Warning: failed to load MicroDualNet {model_path}: {e}")
+            self.model = None
+            self.device = None
+            self.nn_available = False
+
+    def value(self, game: ChessGame) -> float:
+        """返回局面价值 v in [-1, 1]，正值对 RED 有利。未加载模型时抛出异常，调用方需自行判断 nn_available。"""
+        if not self.nn_available:
+            raise RuntimeError("MicroDualNet not available")
+        s = extract_features(game)
+        with torch.no_grad():
+            s_t = torch.from_numpy(s).unsqueeze(0).to(self.device)       # (1, 60)
+            dummy_move = torch.zeros((1, 1, MOVE_FEAT_DIM), dtype=torch.float32, device=self.device)
+            v, _ = self.model(s_t, dummy_move)
+            return float(v.item())
+
+    def policy_scores(self, game: ChessGame, legal_moves) -> Dict[Tuple[int, int, int, int], float]:
+        """返回每个合法走法的策略分数字典。未加载模型时抛出异常，调用方需自行判断 nn_available。"""
+        if not self.nn_available:
+            raise RuntimeError("MicroDualNet not available")
+        if not legal_moves:
+            return {}
+        s = extract_features(game)
+        move_feats = np.stack([_move_to_feat(game, m) for m in legal_moves], axis=0)  # (num_moves, 12)
+        with torch.no_grad():
+            s_t = torch.from_numpy(s).unsqueeze(0).to(self.device)                     # (1, 60)
+            mf_t = torch.from_numpy(move_feats).unsqueeze(0).to(self.device)           # (1, num_moves, 12)
+            _, scores = self.model(s_t, mf_t)
+            scores = scores.squeeze(0).cpu().numpy()                                   # (num_moves,)
+        return {m: float(sc) for m, sc in zip(legal_moves, scores)}

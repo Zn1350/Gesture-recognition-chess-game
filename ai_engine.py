@@ -29,6 +29,8 @@ import random
 import time
 from typing import List, Optional, Tuple, Dict
 
+import numpy as np
+
 import config
 from chess_game import (
     ChessGame, RED, BLACK,
@@ -36,7 +38,7 @@ from chess_game import (
     B_KING, B_GUARD, B_BISHOP, B_ROOK, B_KNIGHT, B_CANNON, B_PAWN,
     PIECE_VALUES, EMPTY,
 )
-from nn_evaluator import load_nn_evaluator, evaluate_board
+from nn_evaluator import load_nn_evaluator, evaluate_board, NNEvaluator
 
 # ── 位置价值表 ────────────────────────────────────────────────────────────────
 _ROOK_PST = [
@@ -91,6 +93,10 @@ _PAWN_PST_RED = [
 # 高价值子（主动送子时优先送这些）
 _HIGH_VALUE_PIECES = {B_ROOK, B_KNIGHT, B_CANNON}
 
+# MicroDualNet 输出 v∈[-1,1]，与手工评估分（材料+位置分，量级约几千）混合前
+# 需要放大到同一量级；一车（1000分）大致对应胜率评估中的显著优势，取该值作为缩放基准。
+_MICRO_EVAL_SCALE = 1000.0
+
 
 def _pst_score(piece: int, r: int, c: int) -> int:
     t = abs(piece)
@@ -105,23 +111,29 @@ def _pst_score(piece: int, r: int, c: int) -> int:
     return 0
 
 
-def _score_to_ai_params(skill_score: float) -> Tuple[int, float]:
+def _score_to_ai_params(skill_score: float) -> Tuple[int, float, float, float]:
     """
     根据实时棋力分计算 AI 参数
-    返回 (search_depth, blunder_rate)
+    返回 (search_depth, blunder_rate, temperature, value_noise_std)
 
     # 棋力分越高 → 搜索深度越深，放水概率越低
     # 目标胜率 70%~90%：blunder_rate 为主要调节旋钮
+    # temperature / value_noise_std：仅在 MicroDualNet 可用时生效（放水增强），
+    #   skill_score 越低 → 温度越高（采样越随机）、噪声越大
     """
+    frac = max(0.0, min(1.0, skill_score / 100.0))
+    temperature = 0.05 + 0.35 * (1.0 - frac)      # skill 100 → 0.05，skill 0 → 0.40
+    value_noise_std = 300.0 * (1.0 - frac)        # skill 100 → 0，skill 0 → 300
+
     if skill_score < 20:
-        return 1, 0.70   # 棋力分 0~20：深度1，放水70%
+        return 1, 0.70, temperature, value_noise_std   # 棋力分 0~20：深度1，放水70%
     if skill_score < 40:
-        return 1, 0.55   # 棋力分 20~40：深度1，放水55%
+        return 1, 0.55, temperature, value_noise_std   # 棋力分 20~40：深度1，放水55%
     if skill_score < 60:
-        return 2, 0.35   # 棋力分 40~60：深度2，放水35%
+        return 2, 0.35, temperature, value_noise_std   # 棋力分 40~60：深度2，放水35%
     if skill_score < 80:
-        return 2, 0.18   # 棋力分 60~80：深度2，放水18%
-    return 3, 0.05       # 棋力分 80~100：深度3，放水5%
+        return 2, 0.18, temperature, value_noise_std   # 棋力分 60~80：深度2，放水18%
+    return 3, 0.05, temperature, value_noise_std        # 棋力分 80~100：深度3，放水5%
 
 
 class AIEngine:
@@ -136,7 +148,11 @@ class AIEngine:
     将 ai_blunder_rate / ai_search_depth 回写到 stats，供 HUD 显示
     """
 
-    def __init__(self):
+    def __init__(self, model_path: Optional[str] = None, disable_nn: bool = False):
+        """
+        disable_nn=True：跳过所有神经网络加载（CNN + MicroDualNet），强制纯手工评估。
+        供 gen_data.py 自我对弈数据生成时使用（多进程 CPU worker，不需要也不应加载网络）。
+        """
         self._nodes = 0
         # 置换表：{board_key: (depth, score, best_move)}
         self._tt: Dict[Tuple, Tuple[int, int, Optional[Tuple[int,int,int,int]]]] = {}
@@ -146,16 +162,43 @@ class AIEngine:
         self._nn_device = None
         self._nn_y_mean = 0.0
         self._nn_y_std = 1.0
+
+        # ── MicroDualNet 占位（默认不可用，disable_nn 或加载失败时保持此状态）───
+        self.nn_evaluator = NNEvaluator.__new__(NNEvaluator)
+        self.nn_evaluator.nn_available = False
+        self.nn_evaluator.model = None
+        self.nn_evaluator.device = None
+        self.nn_available = False
+
+        # ── 放水增强参数（由 _score_to_ai_params 按技能分动态计算并回写）────────
+        self.temperature = 0.1
+        self.value_noise_std = 0.0
+
+        if disable_nn:
+            return
+
         if getattr(config, 'USE_NN_EVALUATOR', False):
-            model_path = getattr(config, 'NN_EVAL_MODEL_PATH', 'model.pth')
-            if os.path.exists(model_path):
+            cnn_model_path = getattr(config, 'NN_EVAL_MODEL_PATH', 'model.pth')
+            if os.path.exists(cnn_model_path):
                 try:
-                    self._nn_model, self._nn_device, self._nn_y_mean, self._nn_y_std = load_nn_evaluator(model_path)
-                    print(f"Loaded NN evaluator: {model_path} on {self._nn_device}")
+                    self._nn_model, self._nn_device, self._nn_y_mean, self._nn_y_std = load_nn_evaluator(cnn_model_path)
+                    print(f"Loaded NN evaluator: {cnn_model_path} on {self._nn_device}")
                 except Exception as e:
-                    print(f"Warning: failed to load NN evaluator {model_path}: {e}")
+                    print(f"Warning: failed to load NN evaluator {cnn_model_path}: {e}")
             else:
-                print(f"Warning: NN evaluator model path not found: {model_path}")
+                print(f"Warning: NN evaluator model path not found: {cnn_model_path}")
+
+        # ── MicroDualNet（轻量策略/价值双头网络，自我对弈训练产出）──────────────
+        # 优先级最高的评估/排序来源；不存在 micro_dual.pth 时 nn_available=False，
+        # 所有相关逻辑自动回退到旧的 CNN / manual 评估，行为与改造前完全一致。
+        micro_model_path = model_path or getattr(config, 'MICRO_NN_MODEL_PATH', 'micro_dual.pth')
+        try:
+            self.nn_evaluator = NNEvaluator(micro_model_path)
+            self.nn_available = self.nn_evaluator.nn_available
+        except Exception as e:
+            print(f"Warning: failed to init MicroDualNet evaluator {micro_model_path}: {e}")
+        if self.nn_available:
+            print(f"Loaded MicroDualNet evaluator: {micro_model_path}")
 
     def get_move(
         self,
@@ -174,7 +217,9 @@ class AIEngine:
         if not moves:
             return None
 
-        depth, blunder_rate = _score_to_ai_params(skill_score)
+        depth, blunder_rate, temperature, value_noise_std = _score_to_ai_params(skill_score)
+        self.temperature = temperature
+        self.value_noise_std = value_noise_std
 
         # 回写 AI 参数到 stats，HUD 可展示
         if stats is not None:
@@ -281,8 +326,23 @@ class AIEngine:
     def _board_key(self, game: ChessGame) -> Tuple:
         return (tuple(tuple(row) for row in game.board), game.current_turn)
 
-    def _order_moves(self, game: ChessGame, moves: List[Tuple]) -> List[Tuple]:
-        """按照吃子优先、历史启发排序（降序）"""
+    def _order_moves(self, game: ChessGame, moves: List[Tuple], use_nn_sorting: bool = False) -> List[Tuple]:
+        """
+        走法排序。
+          use_nn_sorting=True 且 MicroDualNet 可用时（仅根节点调用）：
+            用策略网络对着法打分排序，网络失败时自动回退到手工排序。
+          其余情况（内部节点，或网络不可用）：吃子优先 + 历史启发排序（降序），
+          与改造前完全一致。
+        """
+        if use_nn_sorting and self.nn_available:
+            try:
+                move_scores = self.nn_evaluator.policy_scores(game, moves)
+                sign = 1.0 if game.current_turn == RED else -1.0
+                ordered = sorted(moves, key=lambda m: sign * move_scores.get(m, 0.0), reverse=True)
+                return ordered
+            except Exception:
+                pass
+
         scored = []
         for m in moves:
             fr, fc, tr, tc = m
@@ -321,6 +381,23 @@ class AIEngine:
 
     # ── 正常搜索（迭代加深 + 置换表 + Alpha-Beta）────────────────────────────────
 
+    def _root_ordered_moves(self, game: ChessGame, moves: List[Tuple], skill_score: float) -> List[Tuple]:
+        """
+        根节点走法排序 + 候选裁剪。
+        MicroDualNet 可用时：用策略分数排序，并只保留 Top-K（K 随技能分调整）进入搜索；
+        否则完全回退到原有的手工排序，不做裁剪（行为与改造前一致）。
+        """
+        ordered = self._order_moves(game, moves)
+        if not self.nn_available:
+            return ordered
+        try:
+            policy_scores = self.nn_evaluator.policy_scores(game, moves)
+            ordered = sorted(moves, key=lambda m: policy_scores.get(m, 0.0), reverse=True)
+            k = max(6, min(len(ordered), 10 + int(skill_score / 10)))  # K 随技能分调整，默认约 15
+            return ordered[:k]
+        except Exception:
+            return ordered
+
     def _best_move(
         self,
         game: ChessGame,
@@ -333,8 +410,9 @@ class AIEngine:
         best_move = None
         best_score = None
 
-        # 初始走法排序
-        ordered_moves = self._order_moves(game, moves)
+        # 初始走法排序（网络可用时使用策略网络排序 + Top-K 裁剪，否则用原手工排序）
+        ordered_moves = self._root_ordered_moves(game, moves, skill_score)
+        root_scores: Dict[Tuple[int, int, int, int], int] = {}
 
         for d in range(1, max(1, depth) + 1):
             alpha, beta = -999999, 999999
@@ -345,6 +423,7 @@ class AIEngine:
                 g.make_move(*move)
                 score = self._minimax(g, d - 1, alpha, beta, False)
                 # 这里 score 为局面评估（正值 RED 有利）
+                root_scores[move] = score
                 if local_best_score is None or score > local_best_score:
                     local_best_score = score
                     local_best = move
@@ -363,7 +442,38 @@ class AIEngine:
                 top_choices = ordered_moves[:min(3, len(ordered_moves))]
                 return random.choice(top_choices)
 
+        # ── 放水增强：网络可用时，对根节点走法按温度采样而非严格取最大分 ──────
+        # BLACK 分数越小越好，先转为“越大越好”的偏好分再做 softmax 采样。
+        if self.nn_available and self.temperature > 0 and len(root_scores) > 1:
+            try:
+                return self._temperature_sample(root_scores, best_move)
+            except Exception:
+                pass
+
         return best_move
+
+    def _temperature_sample(
+        self,
+        root_scores: Dict[Tuple[int, int, int, int], int],
+        fallback_move: Tuple[int, int, int, int],
+    ) -> Tuple[int, int, int, int]:
+        """
+        对根节点走法按温度做 softmax 采样。
+        与上面 _best_move 中 `score > local_best_score` 选出 best_move 的既有约定保持一致：
+        分数越大越优先（该约定为原有搜索逻辑的既定行为，此处不做改动，仅按其偏好方向采样）。
+        """
+        items = list(root_scores.items())
+        moves_arr = [m for m, _ in items]
+        prefs = np.array([s for _, s in items], dtype=np.float64)
+        prefs -= prefs.max()
+        scale = max(self.temperature, 1e-3) * 1000.0  # 分数量级约几百~几千，需要缩放温度
+        weights = np.exp(prefs / scale)
+        total = weights.sum()
+        if not np.isfinite(total) or total <= 0:
+            return fallback_move
+        probs = weights / total
+        idx = np.random.choice(len(moves_arr), p=probs)
+        return moves_arr[idx]
 
     def _minimax(self, game: ChessGame, depth: int, alpha: int, beta: int, is_max: bool) -> int:
         self._nodes += 1
@@ -428,14 +538,53 @@ class AIEngine:
             self._tt[key] = (depth, best, best_move)
             return best
 
-    def _evaluate(self, game: ChessGame) -> int:
-        """局面评估（正值 RED 有利，负值 BLACK 有利）"""
-        if self._nn_model is not None and self._nn_device is not None:
-            try:
-                value = evaluate_board(game, self._nn_model, self._nn_device, self._nn_y_mean, self._nn_y_std)
-                return int(value)
-            except Exception:
-                pass
+    # ── 自我对弈数据生成专用接口 ──────────────────────────────────────────────
+
+    def get_move_with_scores(
+        self,
+        game: ChessGame,
+        depth: int = 2,
+    ) -> Tuple[Optional[Tuple[int, int, int, int]], Dict[Tuple[int, int, int, int], int]]:
+        """
+        供 gen_data.py 自我对弈使用：返回 (最佳走法, {所有合法走法: 原始搜索评分})。
+
+        与 _best_move 独立实现（不复用其根节点 is_max=False 的历史遗留写法），
+        对当前走棋方（game.current_turn，可为 RED 或 BLACK）分别正确处理：
+          - RED 走子：评分越大越好；
+          - BLACK 走子：评分越小越好（因为 _minimax 的返回值始终是“正值对 RED 有利”）。
+        评分为 _evaluate 的原始输出（正值 RED 有利），与 _minimax/_quiescence 使用同一套评估，
+        不受放水温度/噪声影响（自我对弈数据需要干净的搜索评分作为训练目标）。
+        """
+        color = game.current_turn
+        moves = game.get_all_moves(color)
+        if not moves:
+            return None, {}
+
+        is_red = (color == RED)
+        ordered_moves = self._order_moves(game, moves)
+        scores: Dict[Tuple[int, int, int, int], int] = {}
+        best_move = None
+        best_score = None
+
+        alpha, beta = -999999, 999999
+        for move in ordered_moves:
+            g = game.board_copy()
+            g.make_move(*move)
+            # 走完这步后轮到对方，故 is_max 对应对方是否为 RED
+            score = self._minimax(g, max(0, depth - 1), alpha, beta, not is_red)
+            scores[move] = score
+            if best_score is None or (score > best_score if is_red else score < best_score):
+                best_score = score
+                best_move = move
+            if is_red:
+                alpha = max(alpha, score)
+            else:
+                beta = min(beta, score)
+
+        return best_move, scores
+
+    def _manual_evaluate(self, game: ChessGame) -> int:
+        """纯手工局面评估（材料 + 位置分），正值 RED 有利。不依赖任何网络，始终可用。"""
         if game.game_over:
             return 100000 if game.winner == RED else -100000
         score = 0
@@ -446,3 +595,41 @@ class AIEngine:
                     score += PIECE_VALUES.get(p, 0)
                     score += _pst_score(p, r, c)
         return score
+
+    def _evaluate(self, game: ChessGame) -> int:
+        """
+        局面评估（正值 RED 有利，负值 BLACK 有利）。优先级：
+          1. MicroDualNet（若可用）：0.7 * nn_v(缩放) + 0.3 * manual_v 混合评估
+          2. 旧 CNN 评估器（若可用）：直接返回其输出（与改造前行为一致）
+          3. 纯手工评估 _manual_evaluate（始终可用的回退）
+        棋局终局始终直接返回 ±100000，不受网络影响。
+        """
+        if game.game_over:
+            return 100000 if game.winner == RED else -100000
+
+        if self.nn_available:
+            try:
+                nn_v = self.nn_evaluator.value(game)          # in [-1, 1]，正值对 RED 有利
+                manual_v = self._manual_evaluate(game)
+                # MicroDualNet 的 tanh 输出与手工评估的分数量级不同，需缩放到可比的量级
+                # 再按 0.7/0.3 权重混合，否则网络的贡献会被手工分数的数值量级淹没。
+                value = 0.7 * (nn_v * _MICRO_EVAL_SCALE) + 0.3 * manual_v
+                if self.value_noise_std > 0:
+                    value += float(np.random.normal(0, self.value_noise_std))
+                return int(value)
+            except Exception:
+                pass
+
+        if self._nn_model is not None and self._nn_device is not None:
+            try:
+                value = evaluate_board(game, self._nn_model, self._nn_device, self._nn_y_mean, self._nn_y_std)
+                if self.value_noise_std > 0:
+                    value += float(np.random.normal(0, self.value_noise_std))
+                return int(value)
+            except Exception:
+                pass
+
+        value = self._manual_evaluate(game)
+        if self.value_noise_std > 0:
+            value += float(np.random.normal(0, self.value_noise_std))
+        return int(value)
