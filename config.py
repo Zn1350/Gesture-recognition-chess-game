@@ -71,8 +71,8 @@ AI_DEPTH_MAP = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3}
 AI_BLUNDER_RATE = {1: 0.50, 2: 0.35, 3: 0.20, 4: 0.08, 5: 0.00}
 
 # 是否启用训练好的神经网络评估器
-USE_NN_EVALUATOR = False
-NN_EVAL_MODEL_PATH = "model.pth"
+USE_NN_EVALUATOR = True
+NN_EVAL_MODEL_PATH = "model_improved.pth"
 
 # AI 思考延迟（秒）
 AI_THINK_DELAY = 0.8

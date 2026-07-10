@@ -14,11 +14,13 @@
   │ 80~100   │    3     │  0.05    │ 接近全力，仅极少失误          │
   └──────────┴──────────┴──────────┴───────────────────────────────┘
 
-放水动作分级（BLUNDER_MODE）：
-  RANDOM    - 随机选一个合法走法（最强让棋）
-  GIVEAWAY  - 主动送出高价值子（车/马/炮）
-  SUBOPTIMAL- 从评分最差的前 N 个走法中随机选
-  MINOR     - 从评分中间段走法中随机选
+放水走法选择（_blunder_move）：
+  棋力分 < 15：优先尝试真正的“送子”（_find_giveaway_move，确保玩家下一步能直接吃到高价值子）
+  其余情况：用局面评估器（NN 优先，无 NN 时用材料+位置分）给所有合法着法打分排序，
+            再根据 skill_score 连续计算一个“目标着法百分位 + 随机窗口”，
+            skill_score 越低 → 目标百分位越靠近“对黑方最差”的一端、窗口越宽；
+            skill_score 越高 → 目标百分位越靠近最优着法、窗口越窄。
+            这样放水力度是连续可调的，不再是离散分档，AI 的失误也更符合当前局面。
 """
 
 from __future__ import annotations
@@ -142,11 +144,13 @@ class AIEngine:
         self._history: Dict[Tuple[int,int,int,int], int] = {}
         self._nn_model = None
         self._nn_device = None
+        self._nn_y_mean = 0.0
+        self._nn_y_std = 1.0
         if getattr(config, 'USE_NN_EVALUATOR', False):
             model_path = getattr(config, 'NN_EVAL_MODEL_PATH', 'model.pth')
             if os.path.exists(model_path):
                 try:
-                    self._nn_model, self._nn_device = load_nn_evaluator(model_path)
+                    self._nn_model, self._nn_device, self._nn_y_mean, self._nn_y_std = load_nn_evaluator(model_path)
                     print(f"Loaded NN evaluator: {model_path} on {self._nn_device}")
                 except Exception as e:
                     print(f"Warning: failed to load NN evaluator {model_path}: {e}")
@@ -193,38 +197,40 @@ class AIEngine:
         skill_score: float,
     ) -> Tuple[int, int, int, int]:
         """
-        分级放水：根据棋力分选择放水力度
+        连续放水：用局面评估器给所有着法打分排序，再按 skill_score 在
+        “百分位 + 随机窗口”上连续插值，选出一个故意变差的着法。
 
-        # skill_score < 20：GIVEAWAY（主动送高价值子）
-        # skill_score < 40：RANDOM（完全随机走子）
-        # skill_score < 60：SUBOPTIMAL（最差的前1/3走法）
-        # skill_score >= 60：MINOR（中间段走法）
+        排序后 scored[0] 是对 BLACK（AI）最好的着法，scored[-1] 是对 BLACK
+        最差（对玩家最有利）的着法。
+
+        # target_pct：目标百分位。skill_score 越低，越靠近 1.0（最差）；
+        #             skill_score 越高，越靠近 0.0（最好）。
+        # window：随机窗口半宽。skill_score 越低窗口越宽（失误更随机、更明显）；
+        #         skill_score 越高窗口越窄（只在最优附近做很小的失误）。
         """
-        if skill_score < 20:
-            # GIVEAWAY：尝试主动把高价值子走到对方能吃的位置
+        if skill_score < 15:
+            # 棋力分极低：优先尝试真正的送子，让玩家能直接吃到高价值子
             giveaway = self._find_giveaway_move(game, moves)
             if giveaway:
                 return giveaway
-            return random.choice(moves)
 
-        if skill_score < 40:
-            # RANDOM：完全随机，制造明显失误
-            return random.choice(moves)
-
-        # 先对所有走法评分
         scored = self._score_all_moves(game, moves)
-        # scored 已按 score 升序（越小对 BLACK 越好）
-
-        if skill_score < 60:
-            # SUBOPTIMAL：从最差的前 1/3 走法中随机选
-            worst_n = max(1, len(scored) // 3)
-            return random.choice(scored[-worst_n:])[1]
-
-        # MINOR（60~80）：从中间段走法中随机选，避免最优也避免最差
         n = len(scored)
-        mid_start = n // 4
-        mid_end   = max(mid_start + 1, n * 3 // 4)
-        return random.choice(scored[mid_start:mid_end])[1]
+        if n <= 1:
+            return scored[0][1] if scored else random.choice(moves)
+
+        target_pct = max(0.0, min(1.0, 1.0 - skill_score / 100.0))
+        window = 0.5 - 0.42 * (skill_score / 100.0)  # 高分~0.08 ~ 低分~0.5
+
+        lo_pct = max(0.0, target_pct - window)
+        hi_pct = min(1.0, target_pct + window)
+        lo_idx = int(round(lo_pct * (n - 1)))
+        hi_idx = int(round(hi_pct * (n - 1)))
+        if hi_idx <= lo_idx:
+            hi_idx = min(n - 1, lo_idx + 1)
+
+        candidates = scored[lo_idx:hi_idx + 1]
+        return random.choice(candidates)[1]
 
     def _find_giveaway_move(
         self,
@@ -426,7 +432,7 @@ class AIEngine:
         """局面评估（正值 RED 有利，负值 BLACK 有利）"""
         if self._nn_model is not None and self._nn_device is not None:
             try:
-                value = evaluate_board(game, self._nn_model, self._nn_device)
+                value = evaluate_board(game, self._nn_model, self._nn_device, self._nn_y_mean, self._nn_y_std)
                 return int(value)
             except Exception:
                 pass
