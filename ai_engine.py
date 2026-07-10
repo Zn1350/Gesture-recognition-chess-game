@@ -22,16 +22,19 @@
 """
 
 from __future__ import annotations
+import os
 import random
 import time
 from typing import List, Optional, Tuple, Dict
 
+import config
 from chess_game import (
     ChessGame, RED, BLACK,
     R_KING, R_GUARD, R_BISHOP, R_ROOK, R_KNIGHT, R_CANNON, R_PAWN,
     B_KING, B_GUARD, B_BISHOP, B_ROOK, B_KNIGHT, B_CANNON, B_PAWN,
     PIECE_VALUES, EMPTY,
 )
+from nn_evaluator import load_nn_evaluator, evaluate_board
 
 # ── 位置价值表 ────────────────────────────────────────────────────────────────
 _ROOK_PST = [
@@ -137,6 +140,18 @@ class AIEngine:
         self._tt: Dict[Tuple, Tuple[int, int, Optional[Tuple[int,int,int,int]]]] = {}
         # 历史启发表：{move_key: score}
         self._history: Dict[Tuple[int,int,int,int], int] = {}
+        self._nn_model = None
+        self._nn_device = None
+        if getattr(config, 'USE_NN_EVALUATOR', False):
+            model_path = getattr(config, 'NN_EVAL_MODEL_PATH', 'model.pth')
+            if os.path.exists(model_path):
+                try:
+                    self._nn_model, self._nn_device = load_nn_evaluator(model_path)
+                    print(f"Loaded NN evaluator: {model_path} on {self._nn_device}")
+                except Exception as e:
+                    print(f"Warning: failed to load NN evaluator {model_path}: {e}")
+            else:
+                print(f"Warning: NN evaluator model path not found: {model_path}")
 
     def get_move(
         self,
@@ -409,6 +424,12 @@ class AIEngine:
 
     def _evaluate(self, game: ChessGame) -> int:
         """局面评估（正值 RED 有利，负值 BLACK 有利）"""
+        if self._nn_model is not None and self._nn_device is not None:
+            try:
+                value = evaluate_board(game, self._nn_model, self._nn_device)
+                return int(value)
+            except Exception:
+                pass
         if game.game_over:
             return 100000 if game.winner == RED else -100000
         score = 0
