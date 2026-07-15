@@ -1,14 +1,24 @@
-pip install numpy==1.26.4 mediapipe==0.10.14 -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install opencv-contrib-python -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install Flask==3.1.3 pygame==2.6.1 torch==2.3.1 -i https://pypi.tuna.tsinghua.edu.cn/simple
+安装依赖，二选一：
 
-或者是直接把requirements.txt改成Flask==3.1.3
-mediapipe==0.10.14
-numpy==1.26.4
-opencv-contrib-python>=4.10,<4.12
-pygame==2.6.1
-torch==2.3.1
-（pip list | findstr opencv确认opencv-python和 opencv-contrib-python不同时存在，否则卸载一个pip uninstall opencv-python -y）
+1. CPU 版（默认，跨平台通用）
+   pip install -r requirements.txt
 
-（查看当前虚拟环境中已安装的所有包及其版本可用pip freeze或pip list，
-如想生成最小化的requirements.txt只包含项目真正需要的包则需pipreqs ./ --encoding=utf-8 --force，注意要在虚拟环境下进行）
+2. GPU 版（CUDA 12.1，需要 NVIDIA 显卡训练/加速时用）
+   pip install -r requirements-gpu.txt
+
+注意：
+- 不要把 requirements.txt 和 requirements-gpu.txt 混着装（比如先装了 CPU 版 torch 再装 GPU 版），
+  会导致 torch 版本互相覆盖不干净。如果之前装错了，先卸载重装：
+  pip uninstall torch -y
+  再按上面命令重新安装对应版本。
+- 只保留 opencv-contrib-python 一个 opencv 包，不要额外装 opencv-python，
+  两者都提供 cv2 模块，同时存在会互相覆盖，行为不确定。
+  确认方式：pip list | findstr opencv
+  如果同时出现 opencv-python 和 opencv-contrib-python，卸载其中一个：
+  pip uninstall opencv-python -y
+- 想查看当前虚拟环境已安装的所有包及版本：pip freeze 或 pip list
+- 如果环境已经装乱了（版本对不上/报错），最简单的方式是删掉 venv 目录重新创建：
+  1. 删除 venv 文件夹
+  2. python -m venv venv
+  3. venv\Scripts\activate
+  4. pip install -r requirements.txt  （或 requirements-gpu.txt）
