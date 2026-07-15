@@ -1,0 +1,5 @@
+1. 切换到目标目录（如E:\Github_clone\Gesture-）
+2. 创建虚拟环境：运行python -m venv venv（如报错“系统找不到文件”，运行where python，找到非“WindowsApps目录下占位程序”的真实python位置再创建，如运行D:\Python\python.exe -m venv venv）
+3. 激活虚拟环境：运行venv\Scripts\activate
+4. 验证：运行where python应得到当前目录下的python.exe
+5. （安装 requirements.txt：运行pip install -r requirements.txt）

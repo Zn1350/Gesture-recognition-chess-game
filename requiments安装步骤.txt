@@ -1,0 +1,14 @@
+pip install numpy==1.26.4 mediapipe==0.10.14 -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install opencv-contrib-python -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install Flask==3.1.3 pygame==2.6.1 torch==2.3.1 -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+或者是直接把requirements.txt改成Flask==3.1.3
+mediapipe==0.10.14
+numpy==1.26.4
+opencv-contrib-python>=4.10,<4.12
+pygame==2.6.1
+torch==2.3.1
+（pip list | findstr opencv确认opencv-python和 opencv-contrib-python不同时存在，否则卸载一个pip uninstall opencv-python -y）
+
+（查看当前虚拟环境中已安装的所有包及其版本可用pip freeze或pip list，
+如想生成最小化的requirements.txt只包含项目真正需要的包则需pipreqs ./ --encoding=utf-8 --force，注意要在虚拟环境下进行）
