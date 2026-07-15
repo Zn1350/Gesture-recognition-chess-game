@@ -134,7 +134,7 @@ def main():
             disable_nn=True,
             use_policy_sort=False,
             use_temp_sample=False,
-            skill_score=80
+            skill_score=100
         ),
         ExperimentConfig(
             name="B组-搜索+CNN",
