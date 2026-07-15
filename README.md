@@ -53,6 +53,7 @@
 3. **安装依赖**
    ```bash
    pip install -r requirements.txt
+   # 如有GPU，则使用pip install -r requirements_gpu.txt
    ```
 
 4. **运行主程序**
@@ -128,6 +129,7 @@ SKILL_RATING_THRESHOLDS = [
 ├── notebooks/          # Jupyter 笔记本
 │   └── train_on_kaggle.ipynb
 └── requirements.txt    # 依赖列表
+└── requirements_gpu.txt    # 依赖列表
 ```
 
 ## 核心功能
