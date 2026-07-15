@@ -205,7 +205,9 @@ class AIEngine:
         game: ChessGame,
         skill_score: float,
         stats=None,          # RehabStats，用于回写 AI 参数供 HUD 显示
+        color: int = BLACK,  # 添加颜色参数，默认黑方保持向后兼容
     ) -> Optional[Tuple[int, int, int, int]]:
+        
         """
         返回 AI 选择的走法 (fr, fc, tr, tc)
 
@@ -213,7 +215,7 @@ class AIEngine:
         # AI放水率:   blunder_rate（见 _score_to_ai_params）
         # 强化学习奖励值: 由 AssessmentModule 在 main.py 中记录
         """
-        moves = game.get_all_moves(BLACK)
+        moves = game.get_all_moves(color)
         if not moves:
             return None
 
