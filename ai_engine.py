@@ -106,11 +106,6 @@ _REPETITION_PENALTY = 40
 # （同一开局/同一残局反复对弈时更容易触发来回震荡型假平局）。
 _TIE_EPSILON = 10
 
-# _quiescence 只走吃子招法，理论上会随棋子被吃光而终止，但子力密集的中局
-# 一层可能有多个同时可行的吃子分支，层数一多会明显拖慢单步耗时；限制到
-# 该深度只损失末端评估的少量精度，换取可预期的最坏情况耗时。
-_QUIESCENCE_MAX_DEPTH = 6
-
 
 def _pst_score(piece: int, r: int, c: int) -> int:
     t = abs(piece)
@@ -370,21 +365,13 @@ class AIEngine:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [m for _, m in scored]
 
-    def _quiescence(self, game: ChessGame, alpha: int, beta: int, color: int, qdepth: int = 0) -> int:
-        """
-        简单静态搜索：只扩展吃子走法以稳定评估。
-        原实现无深度上限：局面吃子链较密集（多子互相牵制的中局）时，每层都
-        枚举全部吃子走法而非只走"原地反吃"，会指数级展开、单步耗时可达数十秒
-        甚至更久。qdepth 达到 _QUIESCENCE_MAX_DEPTH 后直接返回静态评估，
-        牺牲少量末端精度换取稳定的最坏情况耗时，不影响 _minimax 本身的深度。
-        """
+    def _quiescence(self, game: ChessGame, alpha: int, beta: int, color: int) -> int:
+        """简单静态搜索：只扩展吃子走法以稳定评估"""
         stand_pat = self._evaluate(game)
         if stand_pat >= beta:
             return beta
         if alpha < stand_pat:
             alpha = stand_pat
-        if qdepth >= _QUIESCENCE_MAX_DEPTH:
-            return alpha
 
         moves = game.get_all_moves(color)
         # 只保留吃子走法
@@ -396,7 +383,7 @@ class AIEngine:
         for move in cap_moves:
             g = game.board_copy()
             g.make_move(*move)
-            score = -self._quiescence(g, -beta, -alpha, -color, qdepth + 1)
+            score = -self._quiescence(g, -beta, -alpha, -color)
             if score >= beta:
                 return beta
             if score > alpha:
