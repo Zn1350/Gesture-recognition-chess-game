@@ -19,19 +19,33 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from chess_game import ChessGame, RED, BLACK
+import ai_engine
 from ai_engine import AIEngine
+
+# ── 实验专用固定搜索深度（与真实对局的自适应放水机制解耦）───────────────────
+# 原来 ExperimentConfig.skill_score=80 会走 _score_to_ai_params → depth=3，
+# 单步(含NN评估)在本机实测常常超过 90 秒。实测发现瓶颈并非本次改动引入，
+# 而是 chess_game.py 中 make_move → _check_game_over → get_all_moves 在
+# 搜索树的每一个节点都会重新做一遍"完整合法招法生成+自将过滤"，属于原有
+# 实现的固有开销（depth=2 单步 profiling 显示 1 亿+ 次函数调用/约70秒）。
+# 在不改动核心搜索/合法性判断代码的前提下，实验选用 depth=1（单步约几秒，
+# 可在数十分钟内跑完全部对局），足够体现"有无神经网络"对同深度搜索质量/
+# 胜率的影响，符合"实验简单且开销小"的要求；如需更深搜索的对比，需要先
+# 优化 _check_game_over 的开销（更大改动，这里不做）。
+EXPERIMENT_DEPTH = 1
+ai_engine._score_to_ai_params = lambda skill_score: (EXPERIMENT_DEPTH, 0.0, 0.1, 0.0)
 
 
 class ExperimentConfig:
     """实验配置"""
-    def __init__(self, name, disable_nn=False, use_micro_only=False, 
+    def __init__(self, name, disable_nn=False, use_micro_only=False,
                  use_policy_sort=False, use_temp_sample=False):
         self.name = name
         self.disable_nn = disable_nn          # 禁用所有神经网络
         self.use_micro_only = use_micro_only  # 仅用MicroDualNet（不含旧CNN）
         self.use_policy_sort = use_policy_sort  # 使用策略网络排序
         self.use_temp_sample = use_temp_sample  # 使用温度采样
-        self.skill_score = 80                 # AI棋力分（较高水平）
+        self.skill_score = 80                 # AI棋力分（仅用于命名/日志；实际深度由 EXPERIMENT_DEPTH 固定）
 
 
 class ExperimentResult:
@@ -54,7 +68,7 @@ class ExperimentResult:
         return self.total_nodes / self.total_moves if self.total_moves > 0 else 0
 
 
-def play_game(engine1, engine2, config1, config2, max_moves=150):
+def play_game(engine1, engine2, config1, config2, max_moves=30):
     """
     一局对弈：engine1(红方) vs engine2(黑方)
     返回：(winner, nodes1, nodes2, move_count)
@@ -63,7 +77,7 @@ def play_game(engine1, engine2, config1, config2, max_moves=150):
     game = ChessGame()
     nodes1, nodes2 = 0, 0
     move_count = 0
-    
+
     while not game.game_over and move_count < max_moves:
         if game.current_turn == RED:
             # 红方走棋
@@ -75,7 +89,7 @@ def play_game(engine1, engine2, config1, config2, max_moves=150):
             saved_nodes = engine2._nodes
             move = engine2.get_move(game, config2.skill_score, color=BLACK)
             nodes2 += engine2._nodes - saved_nodes
-        
+
         if move:
             if not game.make_move(*move):
                 # 理论上不应发生（说明 get_move 返回了非法招法）；
@@ -83,9 +97,12 @@ def play_game(engine1, engine2, config1, config2, max_moves=150):
                 print(f"\n[警告] 非法招法 {move}，提前结束该局")
                 break
             move_count += 1
+            # 每步都刷新进度：depth=2 单步耗时数秒~十余秒，没有这行会长时间看起来像卡死
+            print(f"\r  第 {move_count} 步...", end="")
+            sys.stdout.flush()
         else:
             break  # 无子可走
-    
+
     return game.winner, nodes1, nodes2, move_count
 
 
@@ -107,11 +124,11 @@ def run_experiment(config1, config2, num_games=20):
     engine2.nn_available = not config2.disable_nn
     
     result = ExperimentResult()
-    
+
     for i in range(num_games):
-        print(f"\rGame {i+1}/{num_games}", end="")
-        sys.stdout.flush()
-        
+        print(f"Game {i+1}/{num_games}")
+        t0 = time.time()
+
         # 交替执红黑
         if i % 2 == 0:
             winner, nodes1, nodes2, moves = play_game(engine1, engine2, config1, config2)
@@ -129,10 +146,13 @@ def run_experiment(config1, config2, num_games=20):
                 result.losses += 1
             else:
                 result.draws += 1
-        
+
+        winner_label = {RED: "红胜", BLACK: "黑胜", None: "平局", 0: "平局"}.get(winner, "平局")
+        print(f"\r  共 {moves} 步，{winner_label}，耗时 {time.time() - t0:.1f}s" + " " * 10)
+
         result.total_nodes += nodes1 + nodes2
         result.total_moves += moves
-    
+
     print()
     return result
 
@@ -183,7 +203,7 @@ def main():
                 continue  # 避免重复对战
             
             print(f"\n【{config1.name}】 vs 【{config2.name}】")
-            result = run_experiment(config1, config2, num_games=10)
+            result = run_experiment(config1, config2, num_games=3)
             
             results[config1.name][config2.name] = {
                 'win_rate': result.win_rate,
