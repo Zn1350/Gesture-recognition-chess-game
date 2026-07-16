@@ -68,7 +68,7 @@ class ExperimentResult:
         return self.total_nodes / self.total_moves if self.total_moves > 0 else 0
 
 
-def play_game(engine1, engine2, config1, config2, max_moves=30):
+def play_game(engine1, engine2, config1, config2, max_moves=60):
     """
     一局对弈：engine1(红方) vs engine2(黑方)
     返回：(winner, nodes1, nodes2, move_count)
@@ -203,10 +203,14 @@ def main():
                 continue  # 避免重复对战
             
             print(f"\n【{config1.name}】 vs 【{config2.name}】")
-            result = run_experiment(config1, config2, num_games=3)
+            result = run_experiment(config1, config2, num_games=6)
             
             results[config1.name][config2.name] = {
                 'win_rate': result.win_rate,
+                # config1 对 config2 的负率（即 config2 对 config1 的胜率），用于对称填充矩阵下三角。
+                # 不能用 1-win_rate 代替：存在平局时 胜+负+平=1，胜+负 可以远小于 1。
+                'loss_rate': result.losses / (result.wins + result.losses + result.draws)
+                             if (result.wins + result.losses + result.draws) > 0 else 0.0,
                 'avg_nodes': result.avg_nodes,
                 'wins': result.wins,
                 'losses': result.losses,
@@ -237,7 +241,9 @@ def main():
                 wr = results[config1.name][config2.name]['win_rate']
                 row += f" |   {wr:5.1%}"
             else:
-                wr = 1.0 - results[config2.name][config1.name]['win_rate']
+                # config1(行) vs config2(列) 未直接跑过，但 config2 vs config1(反过来)跑过；
+                # config1 对 config2 的胜率 = config2 对 config1 的负率（而非 1-胜率，见上方注释）
+                wr = results[config2.name][config1.name]['loss_rate']
                 row += f" |   {wr:5.1%}"
         print(row)
     
