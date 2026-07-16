@@ -97,6 +97,15 @@ _HIGH_VALUE_PIECES = {B_ROOK, B_KNIGHT, B_CANNON}
 # 需要放大到同一量级；一车（1000分）大致对应胜率评估中的显著优势，取该值作为缩放基准。
 _MICRO_EVAL_SCALE = 1000.0
 
+# ── 根节点震荡抑制（见 _best_move）──────────────────────────────────────────
+# 会导致回到最近出现过局面（ChessGame.recent_keys）的招法，轻微降权而非禁用：
+# 40 分远小于一兵（100分），不足以让 AI 放弃明显更优的招法，只在双方分数
+# 本就接近、容易陷入来回震荡的局面里起作用。
+_REPETITION_PENALTY = 40
+# 两招分数差小于此阈值视为"打平"，随机二选一，避免确定性搜索永远选中同一招
+# （同一开局/同一残局反复对弈时更容易触发来回震荡型假平局）。
+_TIE_EPSILON = 10
+
 
 def _pst_score(piece: int, r: int, c: int) -> int:
     t = abs(piece)
@@ -233,7 +242,7 @@ class AIEngine:
             return self._blunder_move(game, moves, skill_score)
 
         # ── 正常 Alpha-Beta 搜索 ──────────────────────────────────────────────
-        return self._best_move(game, moves, depth, skill_score)
+        return self._best_move(game, moves, depth, skill_score, color)
 
     # ── 放水走法生成 ──────────────────────────────────────────────────────────
 
@@ -406,15 +415,27 @@ class AIEngine:
         moves: List[Tuple],
         depth: int,
         skill_score: float,
+        color: int = BLACK,
     ) -> Tuple[int, int, int, int]:
-        """迭代加深调用 _minimax，并使用历史启发/置换表提高效率"""
+        """
+        迭代加深调用 _minimax，并使用历史启发/置换表提高效率。
+
+        按 color 感知根节点的 max/min 方向（与 get_move_with_scores 一致）：
+        RED 求最大、BLACK 求最小，_minimax 的返回值始终是“正值对 RED 有利”。
+        历史遗留写法曾在此处硬编码 is_max=False 且始终取 `score > best`，
+        只在根为 RED 时正确；根为 BLACK（AI 默认执黑）时会系统性地
+        选出对红方更有利、而非对黑方更有利的招法，现已按 is_red 修正。
+        """
         self._nodes = 0
+        is_red = (color == RED)
         best_move = None
         best_score = None
 
         # 初始走法排序（网络可用时使用策略网络排序 + Top-K 裁剪，否则用原手工排序）
         ordered_moves = self._root_ordered_moves(game, moves, skill_score)
         root_scores: Dict[Tuple[int, int, int, int], int] = {}
+        # 走这步前最近出现过的局面（含当前局面），见 _REPETITION_PENALTY
+        recent_keys = set(game.recent_keys)
 
         for d in range(1, max(1, depth) + 1):
             alpha, beta = -999999, 999999
@@ -423,13 +444,32 @@ class AIEngine:
             for move in ordered_moves:
                 g = game.board_copy()
                 g.make_move(*move)
-                score = self._minimax(g, d - 1, alpha, beta, False)
-                # 这里 score 为局面评估（正值 RED 有利）
+                # 走完这步后轮到对方，故 is_max 对应对方是否为 RED
+                score = self._minimax(g, d - 1, alpha, beta, not is_red)
+                # root_scores 记录原始评估分（正值 RED 有利），供下方温度采样使用
                 root_scores[move] = score
-                if local_best_score is None or score > local_best_score:
-                    local_best_score = score
+
+                # 走完这步会回到最近出现过的局面时轻微降权：抑制无历史感知的
+                # 确定性搜索反复选中同一组"来回走"招法、陷入死循环导致假平局。
+                adj_score = score
+                if g.board_key() in recent_keys:
+                    adj_score = score - _REPETITION_PENALTY if is_red else score + _REPETITION_PENALTY
+
+                if local_best_score is None:
+                    local_best_score = adj_score
                     local_best = move
-                alpha = max(alpha, score)
+                else:
+                    better = (adj_score > local_best_score) if is_red else (adj_score < local_best_score)
+                    # 分数打平时随机二选一，避免确定性搜索永远选中排序中更靠前的同一招
+                    tie = abs(adj_score - local_best_score) <= _TIE_EPSILON
+                    if better or (tie and random.random() < 0.5):
+                        local_best_score = adj_score
+                        local_best = move
+
+                if is_red:
+                    alpha = max(alpha, score)
+                else:
+                    beta = min(beta, score)
             if local_best is not None:
                 best_move = local_best
                 best_score = local_best_score
@@ -445,10 +485,9 @@ class AIEngine:
                 return random.choice(top_choices)
 
         # ── 放水增强：网络可用时，对根节点走法按温度采样而非严格取最大分 ──────
-        # BLACK 分数越小越好，先转为“越大越好”的偏好分再做 softmax 采样。
         if self.nn_available and self.temperature > 0 and len(root_scores) > 1:
             try:
-                return self._temperature_sample(root_scores, best_move)
+                return self._temperature_sample(root_scores, best_move, is_red)
             except Exception:
                 pass
 
@@ -458,16 +497,18 @@ class AIEngine:
         self,
         root_scores: Dict[Tuple[int, int, int, int], int],
         fallback_move: Tuple[int, int, int, int],
+        is_red: bool,
     ) -> Tuple[int, int, int, int]:
         """
         对根节点走法按温度做 softmax 采样。
-        与上面 _best_move 中 `score > local_best_score` 选出 best_move 的既有约定保持一致：
-        分数越大越优先（该约定为原有搜索逻辑的既定行为，此处不做改动，仅按其偏好方向采样）。
+        root_scores 为原始评估分（正值 RED 有利）：RED 分数越大越优先，
+        BLACK 分数越小越优先，采样前先按 is_red 转成“越大越优先”的偏好分。
         """
         items = list(root_scores.items())
         moves_arr = [m for m, _ in items]
-        prefs = np.array([s for _, s in items], dtype=np.float64)
-        prefs -= prefs.max()
+        raw = np.array([s for _, s in items], dtype=np.float64)
+        prefs = raw if is_red else -raw
+        prefs = prefs - prefs.max()
         scale = max(self.temperature, 1e-3) * 1000.0  # 分数量级约几百~几千，需要缩放温度
         weights = np.exp(prefs / scale)
         total = weights.sum()

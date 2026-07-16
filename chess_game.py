@@ -5,8 +5,14 @@
 """
 
 from __future__ import annotations
+from collections import deque
 from copy import deepcopy
 from typing import List, Optional, Tuple
+
+# 最近局面历史窗口长度：AI 根节点选招时用它识别"会导致回到最近出现过
+# 局面"的招法并降权，抑制无历史感知的确定性搜索反复选中同一组"来回走"
+# 招法、陷入死循环导致假平局。12 步覆盖常见的 2~3 回合来回震荡模式。
+RECENT_KEYS_MAXLEN = 12
 
 # 棋子类型常量
 EMPTY  = 0
@@ -87,8 +93,14 @@ class ChessGame:
         self.captured_pieces: List[int] = []
         self.game_over: bool = False
         self.winner: Optional[int] = None
+        # 最近局面历史（含当前局面），用于 AI 根节点招法震荡检测，见 RECENT_KEYS_MAXLEN
+        self.recent_keys: deque = deque([self.board_key()], maxlen=RECENT_KEYS_MAXLEN)
 
     # ── 公共接口 ──────────────────────────────────────────────────────────────
+
+    def board_key(self) -> Tuple:
+        """当前局面的可哈希 key（棋盘 + 走棋方），用于置换表 / 重复局面检测"""
+        return (tuple(tuple(row) for row in self.board), self.current_turn)
 
     def get_piece(self, r: int, c: int) -> int:
         return self.board[r][c]
@@ -112,6 +124,7 @@ class ChessGame:
         self.board[tr][tc] = self.board[fr][fc]
         self.board[fr][fc] = EMPTY
         self.current_turn = -self.current_turn
+        self.recent_keys.append(self.board_key())
         self._check_game_over()
         return True
 
@@ -125,6 +138,8 @@ class ChessGame:
         if captured != EMPTY and self.captured_pieces:
             self.captured_pieces.pop()
         self.current_turn = -self.current_turn
+        if len(self.recent_keys) > 1:
+            self.recent_keys.pop()
         self.game_over = False
         self.winner = None
         return True
@@ -318,4 +333,8 @@ class ChessGame:
         g.captured_pieces = []
         g.game_over = self.game_over
         g.winner = self.winner
+        # 搜索用副本不需要重复局面历史：震荡检测只在真实对局的根节点做一次，
+        # 不随每个模拟节点传播，保持搜索开销不变。给空 deque 只是为了让
+        # board_key()/recent_keys 属性始终存在，避免误用时报 AttributeError。
+        g.recent_keys = deque(maxlen=RECENT_KEYS_MAXLEN)
         return g

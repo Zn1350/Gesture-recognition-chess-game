@@ -68,16 +68,20 @@ def play_game(engine1, engine2, config1, config2, max_moves=150):
         if game.current_turn == RED:
             # 红方走棋
             saved_nodes = engine1._nodes
-            move = engine1.get_move(game, config1.skill_score)
+            move = engine1.get_move(game, config1.skill_score, color=RED)
             nodes1 += engine1._nodes - saved_nodes
         else:
             # 黑方走棋
             saved_nodes = engine2._nodes
-            move = engine2.get_move(game, config2.skill_score)
+            move = engine2.get_move(game, config2.skill_score, color=BLACK)
             nodes2 += engine2._nodes - saved_nodes
         
         if move:
-            game.make_move(*move)
+            if not game.make_move(*move):
+                # 理论上不应发生（说明 get_move 返回了非法招法）；
+                # 保留断路而非继续空转 max_moves 轮，避免再次伪装成平局
+                print(f"\n[警告] 非法招法 {move}，提前结束该局")
+                break
             move_count += 1
         else:
             break  # 无子可走
