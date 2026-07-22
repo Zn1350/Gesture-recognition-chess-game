@@ -99,40 +99,28 @@ http://localhost:5000
 
 ## 项目结构
 
-当前仓库包含桌面版交互程序、网页版演示服务、训练脚本以及模型与数据资源，整体结构可分为以下几部分：
-
 ```text
 .
 ├── main.py                  # 桌面版主程序入口
-├── config.py                # 全局配置与参数定义
-├── ui.py                    # Pygame 界面渲染与棋盘显示
+├── config.py                # 全局配置与参数
+├── ui.py                    # Pygame 界面渲染
 ├── chess_game.py            # 中国象棋规则与棋局逻辑
 ├── vision.py                # MediaPipe 手势识别与状态机
 ├── ai_engine.py             # 自适应 AI 引擎
-├── assessment.py            # 康复评估与棋力评分逻辑
+├── assessment.py            # 康复评估与 Q-Learning 棋力评分
 ├── gesture_rl.py            # 手势阈值自适应 RL 模块
-├── features.py              # 棋局特征提取与状态编码
 ├── nn_evaluator.py          # 神经网络评估器相关代码
-├── gen_data.py              # 训练数据生成脚本
-├── train_micro.py           # 微型网络训练脚本
+├── features.py              # 棋局特征提取
 ├── model_improved.pth       # 预训练模型文件
 ├── micro_dual.pth           # 微型双头网络模型文件
-├── selfplay_data/           # 自对弈数据集目录
-│   ├── boards.npy
-│   ├── features.npy
-│   ├── move_scores.npy
-│   ├── moves_order.npy
-│   └── z_values.npy
-├── micro_dual/              # PyTorch 模型资源目录
+├── gen_data.py              # 训练数据生成脚本
+├── train_micro.py           # 微型网络训练脚本
 ├── notebooks/               # 训练与实验 notebook
 ├── web/                     # Flask 网页版实现
 │   ├── app.py               # Web 后端入口
 │   └── templates/
 │       └── index.html       # Web 前端页面
-├── requirements.txt         # Python 依赖列表
-├── requirements_gpu.txt     # GPU 环境依赖列表
-├── requiments安装步骤.txt   # 本地安装说明
-└── README.md                # 项目说明文档
+└── requirements.txt         # 依赖列表
 ```
 
 ## 核心机制

@@ -1,0 +1,1 @@
+运行pyinstaller RehabChess.spec即可

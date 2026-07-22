@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  rehab-chess:
+    build: .
+    container_name: rehab-chess-app
+    environment:
+      - PYTHONPATH=/app
+      - DISPLAY=:0
+    volumes:
+      # 共享 X11 显示（Linux/Mac）
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      # 共享摄像头设备
+      - /dev/video0:/dev/video0
+    devices:
+      - /dev/video0:/dev/video0
+    privileged: true
+    restart: unless-stopped
+    networks:
+      - rehab-chess-network
+
+networks:
+  rehab-chess-network:
+    driver: bridge

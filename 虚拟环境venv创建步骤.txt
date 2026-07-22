@@ -3,3 +3,4 @@
 3. 激活虚拟环境：运行venv\Scripts\activate
 4. 验证：运行where python应得到当前目录下的python.exe
 5. （安装 requirements.txt：运行pip install -r requirements.txt）
+6.（删除venv：先运行deactivate退出虚拟环境，再rm -rf venv强制递归删除，删后无法恢复）
