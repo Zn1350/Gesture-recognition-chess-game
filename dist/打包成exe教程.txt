@@ -1,1 +1,4 @@
-运行pyinstaller RehabChess.spec即可
+在仓库根目录运行 python -m pip install -r requirements.txt pyinstaller。
+运行 python build_exe.py，生成 dist/Gomoku.exe。
+已有的 python -m PyInstaller RehabChess.spec 命令也可使用。
+程序内置表情识别模型及其许可文件。

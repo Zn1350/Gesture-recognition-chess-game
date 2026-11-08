@@ -1,16 +1,16 @@
-# 手部康复象棋系统 - Docker 镜像配置
+# 五子棋表情辅助对弈 - Docker 镜像配置
 # 基于 Python 3.10，支持桌面应用（main.py）
 
 FROM python:3.10-slim
 
 # 维护者信息
 LABEL maintainer="Student <student@example.com>"
-LABEL description="手部康复象棋系统 - Hand Rehab Chinese Chess"
+LABEL description="五子棋表情辅助对弈"
 
 # 设置工作目录
 WORKDIR /app
 
-# 安装系统依赖（OpenCV、MediaPipe、Pygame 需要的底层库）
+# 安装 OpenCV 和 Pygame 的系统依赖及中文字体
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libsm6 \
@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsdl2-mixer-2.0-0 \
     libsdl2-ttf-2.0-0 \
     libportaudio2 \
+    fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
@@ -34,8 +35,9 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua
 # 复制项目所有文件
 COPY . .
 
-# 验证模型文件存在（构建时检查）
-RUN ls -la *.pth || echo "Note: Model files may need to be placed manually"
+# 验证本机推理模型已经复制
+RUN test -s models/face_detection_yunet_2023mar.onnx && \
+    test -s models/facial_expression_recognition_mobilefacenet_2022july.onnx
 
 # 设置环境变量
 ENV PYTHONPATH=/app
