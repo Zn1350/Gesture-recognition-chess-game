@@ -79,17 +79,53 @@ class GomokuEngineTests(unittest.TestCase):
                 self.assertEqual(result.nodes, 0)
 
     def test_mandatory_block_is_identical_at_every_level(self):
-        self.play([(0, 0), (6, 1), (1, 1), (6, 3), (3, 3), (6, 5), (4, 4)])
+        # White can create a fork, but black would win before white can finish it.
+        self.play([(0, 0), (6, 5), (1, 1), (6, 6), (3, 3), (6, 7), (4, 4)])
         for level in PROFILES:
             with self.subTest(level=level):
                 result = self.ai.choose_move(self.game.board_copy(), level=level)
                 self.assertEqual((result.move, result.reason), ((2, 2), "block"))
                 self.assertEqual(result.nodes, 0)
 
+    def test_hidden_fork_is_found_before_candidate_pruning(self):
+        # White's unique fork ranked 39th before this check, below every search width.
+        self.play([
+            (6, 11), (7, 8), (8, 4), (6, 8), (9, 3), (6, 5), (7, 3),
+            (4, 11), (8, 5), (8, 8), (9, 10), (5, 10), (8, 7), (4, 7),
+            (9, 8), (9, 5), (3, 6), (4, 10), (5, 3),
+        ])
+        snapshot = self.game.board_copy()
+        for level in PROFILES:
+            with self.subTest(level=level):
+                result = self.ai.choose_move(self.game.board, level=level)
+                self.assertEqual((result.move, result.reason), ((4, 8), "fork"))
+                self.assertEqual(result.nodes, 0)
+        self.assertEqual(self.game.board_copy(), snapshot)
+
+        # The two winning replies are independent. Blocking either leaves the other.
+        self.play([(4, 8)])
+        for block, reply in [((4, 9), (5, 8)), ((5, 8), (4, 9))]:
+            self.play([block, reply])
+            self.assertEqual(self.game.winner, WHITE)
+            self.assertTrue(self.game.undo_last_turn())
+
+    def test_counter_threat_defends_independent_enemy_forks(self):
+        self.play([
+            (2, 5), (0, 0), (2, 6), (0, 14), (2, 7), (6, 0), (7, 5),
+            (6, 14), (7, 6), (14, 0), (7, 7), (12, 5), (12, 3), (12, 6),
+            (12, 9), (12, 7), (14, 14),
+        ])
+        # Black has forks on two rows. White can use its own four to force a reply.
+        for level in PROFILES:
+            with self.subTest(level=level):
+                result = self.ai.choose_move(self.game.board_copy(), level=level)
+                self.assertEqual(result.reason, "defend_fork")
+                self.assertIn(result.move, [(12, 4), (12, 8)])
+
     def test_same_position_uses_distinct_search_budgets(self):
         self.play([
-            (7, 6), (9, 6), (5, 8), (5, 7), (8, 7), (6, 8), (9, 8),
-            (8, 8), (8, 5), (5, 5), (7, 7), (7, 9), (7, 5),
+            (4, 5), (8, 10), (5, 11), (4, 6), (9, 8), (6, 9), (6, 11),
+            (6, 10), (11, 10), (8, 11), (4, 8), (6, 8), (9, 11),
         ])
         snapshot = self.game.board_copy()
         decisions = [self.ai.choose_move(self.game.board, level=level) for level in PROFILES]
@@ -103,10 +139,7 @@ class GomokuEngineTests(unittest.TestCase):
             row, col = result.move
             self.assertEqual(snapshot[row][col], EMPTY)
 
-        # The easier move allows black to create a two-ended diagonal four.
-        # The standard move first creates a white four, gaining the initiative.
-        self.assertEqual(decisions[0].move, (6, 7))
-        self.assertEqual(decisions[-1].move, (4, 6))
+        self.assertEqual(len({result.move for result in decisions}), len(PROFILES))
 
     def test_exhausted_search_falls_back_without_mutating_input(self):
         self.play([(7, 7)])

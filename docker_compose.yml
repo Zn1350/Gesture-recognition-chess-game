@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   rehab-chess:
-    build: .
+    build:
+      context: .
+      dockerfile: dockerfile
     container_name: rehab-chess-app
     environment:
       - PYTHONPATH=/app

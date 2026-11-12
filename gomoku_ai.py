@@ -1,4 +1,4 @@
-"""Bounded Gomoku search with a shared tactical check for all levels."""
+"""Bounded Gomoku search with shared win and fork checks for all levels."""
 
 from dataclasses import dataclass
 
@@ -18,6 +18,14 @@ _SHAPE_WEIGHTS = (
     (0, 6, 26),
     (0, 55, 280),
     (0, 600, 5_000),
+)
+_FIVE_WINDOWS = tuple(
+    tuple((row + step * dr, col + step * dc) for step in range(CONNECT))
+    for dr, dc in DIRECTIONS
+    for row in range(BOARD_SIZE)
+    for col in range(BOARD_SIZE)
+    if 0 <= row + (CONNECT - 1) * dr < BOARD_SIZE
+    and 0 <= col + (CONNECT - 1) * dc < BOARD_SIZE
 )
 
 
@@ -87,6 +95,43 @@ def _rank_candidates(board: Board, side: int) -> list[_Candidate]:
         candidate.move,
     ))
     return candidates
+
+
+def _winning_pairs(board: Board) -> dict[int, dict[Move, set[Move]]]:
+    """For each side and first move, collect the newly created winning points."""
+    pairs: dict[int, dict[Move, set[Move]]] = {BLACK: {}, WHITE: {}}
+    for window in _FIVE_WINDOWS:
+        stones = [board[row][col] for row, col in window]
+        if stones.count(EMPTY) != 2:
+            continue
+        if stones.count(BLACK) == CONNECT - 2:
+            side = BLACK
+        elif stones.count(WHITE) == CONNECT - 2:
+            side = WHITE
+        else:
+            continue
+        first, second = (move for move, stone in zip(window, stones) if stone == EMPTY)
+        pairs[side].setdefault(first, set()).add(second)
+        pairs[side].setdefault(second, set()).add(first)
+    return pairs
+
+
+def _fork_defenses(
+    candidates: list[_Candidate], attacks: dict[Move, set[Move]], enemy_forks: dict[Move, set[Move]]
+) -> list[_Candidate]:
+    defenses = []
+    for candidate in candidates:
+        move = candidate.move
+        threats = attacks.get(move, ())
+        # A counter-threat forces the enemy to play its winning point as a block.
+        # Otherwise, every enemy fork is a possible reply.
+        if not any(
+            fork != move and len(points) - (move in points) >= 2
+            and (not threats or fork in threats)
+            for fork, points in enemy_forks.items()
+        ):
+            defenses.append(candidate)
+    return defenses
 
 
 class _BudgetExhausted(Exception):
@@ -180,6 +225,22 @@ class GomokuAI:
             if candidate.defense == _MATE:
                 return MoveDecision(candidate.move, "block", profile)
 
+        pairs = _winning_pairs(board)
+        attacks = pairs[side]
+        # Every fork has a stone within two squares and is in the untrimmed frontier.
+        # The opponent has no immediate win and can cover only one winning point.
+        for candidate in candidates:
+            if len(attacks.get(candidate.move, ())) >= 2:
+                return MoveDecision(candidate.move, "fork", profile)
+
+        reason = "search"
+        enemy_forks = {move: points for move, points in pairs[-side].items() if len(points) >= 2}
+        if enemy_forks:
+            defenses = _fork_defenses(candidates, attacks, enemy_forks)
+            if defenses:
+                candidates = defenses
+                reason = "defend_fork"
+
         work_board = [list(row) for row in board]
         candidates = candidates[:profile.width]
         search = _Search(profile)
@@ -192,4 +253,4 @@ class GomokuAI:
                 break
             completed_depth = depth
             candidates.sort(key=lambda candidate: candidate.move != best)
-        return MoveDecision(best, "search", profile, search.nodes, completed_depth)
+        return MoveDecision(best, reason, profile, search.nodes, completed_depth)
